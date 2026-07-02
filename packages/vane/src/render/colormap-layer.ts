@@ -1,0 +1,221 @@
+/**
+ * `colormap` render mode: one scalar field as a colored surface.
+ *
+ * A MapLibre CustomLayerInterface that draws the dataset's bbox as a quad in
+ * mercator space and, per fragment, converts mercator → lat/lon → grid UV,
+ * samples the R16F field texture (hardware bilinear) and maps the physical
+ * value through a 256-entry colormap LUT over `clim`.
+ */
+
+import type { CustomLayerInterface, Map as MapLibreMap } from "maplibre-gl";
+
+import type { VaneDataset } from "../dataset.js";
+import { buildLut, stopsRange, type Colormap } from "./colormaps.js";
+import {
+  assertWebGL2,
+  compileProgram,
+  mercator,
+  projectionMatrix,
+  uploadFieldTexture,
+} from "./gl.js";
+
+const VERTEX_SHADER = `#version 300 es
+in vec2 a_uv;
+uniform mat4 u_matrix;
+uniform vec4 u_merc; // mercator x0,y0 (nw) .. x1,y1 (se)
+out vec2 v_merc;
+void main() {
+  vec2 pos = mix(u_merc.xy, u_merc.zw, a_uv);
+  v_merc = pos;
+  gl_Position = u_matrix * vec4(pos, 0.0, 1.0);
+}`;
+
+const FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+in vec2 v_merc;
+uniform sampler2D u_field;
+uniform sampler2D u_lut;
+uniform vec4 u_bbox; // west, south, east, north (degrees)
+uniform vec2 u_clim;
+uniform float u_opacity;
+out vec4 fragColor;
+const float PI = 3.141592653589793;
+void main() {
+  float lon = v_merc.x * 360.0 - 180.0;
+  float lat = degrees(2.0 * atan(exp(PI * (1.0 - 2.0 * v_merc.y))) - PI * 0.5);
+  vec2 uv = vec2((lon - u_bbox.x) / (u_bbox.z - u_bbox.x),
+                 (u_bbox.w - lat) / (u_bbox.w - u_bbox.y));
+  if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) discard;
+  float value = texture(u_field, uv).r;
+  if (!(value == value)) discard; // NaN = nodata
+  float t = clamp((value - u_clim.x) / (u_clim.y - u_clim.x), 0.0, 1.0);
+  vec4 color = texture(u_lut, vec2(t, 0.5));
+  float alpha = color.a * u_opacity;
+  fragColor = vec4(color.rgb * alpha, alpha); // premultiplied
+}`;
+
+export interface ColormapLayerOptions {
+  id: string;
+  dataset: VaneDataset;
+  variable: string;
+  timestep?: number;
+  colormap?: Colormap;
+  /** Physical value range mapped over the colormap. */
+  clim?: [number, number];
+  opacity?: number;
+}
+
+export class ColormapLayer implements CustomLayerInterface {
+  readonly id: string;
+  readonly type = "custom" as const;
+  readonly renderingMode = "2d" as const;
+
+  private readonly dataset: VaneDataset;
+  private readonly variable: string;
+  private colormap: Colormap;
+  private clim: [number, number];
+  private opacity: number;
+  private timestep: number;
+
+  private map: MapLibreMap | null = null;
+  private gl: WebGL2RenderingContext | null = null;
+  private program: WebGLProgram | null = null;
+  private vao: WebGLVertexArrayObject | null = null;
+  private fieldTexture: WebGLTexture | null = null;
+  private lutTexture: WebGLTexture | null = null;
+  private fieldReady = false;
+  private lutDirty = true;
+  private loadGeneration = 0;
+
+  constructor(options: ColormapLayerOptions) {
+    this.id = options.id;
+    this.dataset = options.dataset;
+    this.variable = options.variable;
+    this.timestep = options.timestep ?? 0;
+    this.opacity = options.opacity ?? 1;
+
+    const meta = this.dataset.variableMeta(this.variable);
+    this.colormap = options.colormap ?? meta.default_colormap ?? "viridis";
+    this.clim =
+      options.clim ??
+      meta.default_clim ??
+      (typeof this.colormap !== "string" ? stopsRange(this.colormap) : [0, 1]);
+  }
+
+  onAdd(map: MapLibreMap, gl: WebGLRenderingContext | WebGL2RenderingContext): void {
+    this.map = map;
+    const gl2 = (this.gl = assertWebGL2(gl));
+    this.program = compileProgram(gl2, VERTEX_SHADER, FRAGMENT_SHADER);
+
+    this.vao = gl2.createVertexArray();
+    gl2.bindVertexArray(this.vao);
+    const quad = gl2.createBuffer();
+    gl2.bindBuffer(gl2.ARRAY_BUFFER, quad);
+    gl2.bufferData(
+      gl2.ARRAY_BUFFER,
+      new Float32Array([0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1]),
+      gl2.STATIC_DRAW,
+    );
+    const aUv = gl2.getAttribLocation(this.program, "a_uv");
+    gl2.enableVertexAttribArray(aUv);
+    gl2.vertexAttribPointer(aUv, 2, gl2.FLOAT, false, 0, 0);
+    gl2.bindVertexArray(null);
+
+    this.fieldTexture = gl2.createTexture();
+    this.lutTexture = gl2.createTexture();
+    void this.loadTimestep(this.timestep);
+  }
+
+  onRemove(): void {
+    const gl = this.gl;
+    if (gl) {
+      if (this.program) gl.deleteProgram(this.program);
+      if (this.vao) gl.deleteVertexArray(this.vao);
+      if (this.fieldTexture) gl.deleteTexture(this.fieldTexture);
+      if (this.lutTexture) gl.deleteTexture(this.lutTexture);
+    }
+    this.gl = null;
+    this.map = null;
+    this.program = null;
+    this.vao = null;
+    this.fieldTexture = null;
+    this.lutTexture = null;
+    this.fieldReady = false;
+    this.lutDirty = true;
+  }
+
+  /** Switch the displayed timestep; keeps the old frame until data arrives. */
+  setTimestep(timestep: number): void {
+    this.timestep = timestep;
+    void this.loadTimestep(timestep);
+  }
+
+  setOpacity(opacity: number): void {
+    this.opacity = opacity;
+    this.map?.triggerRepaint();
+  }
+
+  setColormap(colormap: Colormap, clim?: [number, number]): void {
+    this.colormap = colormap;
+    if (clim) this.clim = clim;
+    else if (typeof colormap !== "string") this.clim = stopsRange(colormap);
+    this.lutDirty = true;
+    this.map?.triggerRepaint();
+  }
+
+  private async loadTimestep(timestep: number): Promise<void> {
+    const generation = ++this.loadGeneration;
+    const field = await this.dataset.getField(this.variable, timestep);
+    // A newer request superseded this one while we were fetching.
+    if (generation !== this.loadGeneration || !this.gl || !this.fieldTexture) return;
+    uploadFieldTexture(this.gl, this.fieldTexture, field);
+    this.fieldReady = true;
+    this.map?.triggerRepaint();
+  }
+
+  render(gl_: WebGLRenderingContext | WebGL2RenderingContext, matrixOrOptions: unknown): void {
+    const gl = this.gl;
+    if (!gl || !this.program || !this.vao || !this.fieldReady) return;
+
+    if (this.lutDirty && this.lutTexture) {
+      gl.bindTexture(gl.TEXTURE_2D, this.lutTexture);
+      gl.texImage2D(
+        gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+        buildLut(this.colormap, this.clim),
+      );
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      this.lutDirty = false;
+    }
+
+    const [west, south, east, north] = this.dataset.meta.bbox;
+    const [x0, y0] = mercator(west, north);
+    const [x1, y1] = mercator(east, south);
+
+    gl.useProgram(this.program);
+    gl.bindVertexArray(this.vao);
+    gl.uniformMatrix4fv(
+      gl.getUniformLocation(this.program, "u_matrix"),
+      false,
+      projectionMatrix(matrixOrOptions),
+    );
+    gl.uniform4f(gl.getUniformLocation(this.program, "u_merc"), x0, y0, x1, y1);
+    gl.uniform4f(gl.getUniformLocation(this.program, "u_bbox"), west, south, east, north);
+    gl.uniform2f(gl.getUniformLocation(this.program, "u_clim"), this.clim[0], this.clim[1]);
+    gl.uniform1f(gl.getUniformLocation(this.program, "u_opacity"), this.opacity);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.fieldTexture);
+    gl.uniform1i(gl.getUniformLocation(this.program, "u_field"), 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.lutTexture);
+    gl.uniform1i(gl.getUniformLocation(this.program, "u_lut"), 1);
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.DEPTH_TEST);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.bindVertexArray(null);
+  }
+}

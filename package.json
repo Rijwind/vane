@@ -1,0 +1,8 @@
+{
+  "name": "vane-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/vane",
+    "examples/demo"
+  ]
+}

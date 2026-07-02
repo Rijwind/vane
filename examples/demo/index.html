@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vane demo — weather from a single file</title>
+    <style>
+      html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+      #map { position: absolute; inset: 0; }
+      #panel {
+        position: absolute; left: 12px; bottom: 24px; z-index: 10;
+        background: rgba(16, 22, 28, 0.88); color: #e6edf3;
+        border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px;
+        padding: 14px 16px; width: 320px; backdrop-filter: blur(6px);
+        font-size: 13px;
+      }
+      #panel h1 { font-size: 14px; margin: 0 0 2px; font-weight: 600; }
+      #panel .sub { color: #8b98a5; margin: 0 0 10px; font-size: 12px; }
+      #time-row { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; }
+      #slider { flex: 1; accent-color: #4fb6c4; }
+      #play {
+        background: none; border: 1px solid rgba(255,255,255,.2); color: inherit;
+        border-radius: 6px; width: 28px; height: 24px; cursor: pointer;
+      }
+      #timestamp { font-variant-numeric: tabular-nums; color: #b7c2cc; font-size: 12px; }
+      .toggles { display: flex; gap: 12px; margin-top: 8px; }
+      .toggles label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+      #legend { margin-top: 10px; }
+      #legend-bar { height: 8px; border-radius: 4px; margin-bottom: 3px; }
+      #legend-labels { display: flex; justify-content: space-between; color: #8b98a5; font-size: 11px; }
+      #attrib { margin-top: 10px; color: #6c7885; font-size: 11px; }
+      #attrib a { color: #8fb8c9; }
+      #error {
+        position: absolute; inset: 0; display: none; place-items: center;
+        background: #10161c; color: #e6edf3; z-index: 20; padding: 24px; text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="error"></div>
+    <div id="panel">
+      <h1 id="title">Vane demo</h1>
+      <p class="sub" id="subtitle">loading…</p>
+      <div id="time-row">
+        <button id="play" title="play/pause">▶</button>
+        <input id="slider" type="range" min="0" max="0" value="0" step="1" />
+      </div>
+      <div id="timestamp"></div>
+      <div class="toggles">
+        <label><input type="checkbox" id="toggle-temp" checked /> temperature</label>
+        <label><input type="checkbox" id="toggle-wind" checked /> wind</label>
+      </div>
+      <div id="legend">
+        <div id="legend-bar"></div>
+        <div id="legend-labels"><span id="legend-min"></span><span id="legend-max"></span></div>
+      </div>
+      <div id="attrib"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
