@@ -90,5 +90,16 @@ def knmi(out_path: str, api_key: str, max_hours: int, keep_grib: str | None) -> 
                         keep_grib=Path(keep_grib) if keep_grib else None)
 
 
+@main.command()
+@click.argument("out_path", type=click.Path(dir_okay=False))
+@click.option("--api-key", envvar="KNMI_API_KEY", required=True,
+              help="KNMI Open Data API key (env: KNMI_API_KEY)")
+def radar(out_path: str, api_key: str) -> None:
+    """Download the latest KNMI radar nowcast and convert it to .vane."""
+    from vane_tools.knmi import build_radar_vane
+
+    build_radar_vane(out_path, api_key=api_key)
+
+
 if __name__ == "__main__":
     main()

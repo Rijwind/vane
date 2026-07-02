@@ -1,6 +1,12 @@
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { ColormapLayer, ParticlesLayer, VaneDataset, buildLut } from "vane";
+import {
+  ColormapLayer,
+  ParticlesLayer,
+  VaneDataset,
+  buildLut,
+  type Colormap,
+} from "vane";
 
 /**
  * Data source: `?data=<url>` query param wins; a URL ending in .json is
@@ -11,8 +17,13 @@ const DATA_URL =
   new URLSearchParams(location.search).get("data") ?? "/data/demo.vane";
 
 function show(id: string, text: string) {
-  const el = document.getElementById(id)!;
-  el.textContent = text;
+  document.getElementById(id)!.textContent = text;
+}
+
+interface DemoLayer {
+  toggleId: string;
+  label: string;
+  layer: ColormapLayer | ParticlesLayer;
 }
 
 async function main() {
@@ -21,17 +32,15 @@ async function main() {
     : await VaneDataset.open(DATA_URL);
   const meta = ds.meta;
   const [west, south, east, north] = meta.bbox;
-  const TEMP_CLIM = ds.variableMeta("temperature").default_clim ?? [0, 30];
 
   show("title", `Vane demo — ${meta.source}`);
   show(
     "subtitle",
     `${meta.timesteps.length} timesteps · run ${meta.model_run} · one .vane file, range requests only`,
   );
-  document.getElementById("attrib")!.innerHTML =
-    meta.source.startsWith("knmi")
-      ? 'data: © <a href="https://dataplatform.knmi.nl/">KNMI</a>, CC-BY-4.0 · basemap © <a href="https://carto.com/">CARTO</a> / OSM'
-      : 'synthetic demo data · basemap © <a href="https://carto.com/">CARTO</a> / OSM';
+  document.getElementById("attrib")!.innerHTML = meta.source.startsWith("knmi")
+    ? 'data: © <a href="https://dataplatform.knmi.nl/">KNMI</a>, CC-BY-4.0 · basemap © <a href="https://carto.com/">CARTO</a> / OSM'
+    : 'synthetic demo data · basemap © <a href="https://carto.com/">CARTO</a> / OSM';
 
   const map = new maplibregl.Map({
     container: "map",
@@ -56,60 +65,100 @@ async function main() {
     ],
     fitBoundsOptions: { padding: 40 },
   });
-
   map.on("error", (e) => console.error("map error:", e.error ?? e));
 
-  const temperature = new ColormapLayer({
-    id: "vane-temperature",
-    dataset: ds,
-    variable: "temperature",
-    colormap: "thermal",
-    clim: TEMP_CLIM,
-    opacity: 0.65,
-  });
-  const precipitation = new ColormapLayer({
-    id: "vane-precipitation",
-    dataset: ds,
-    variable: "precipitation",
-    opacity: 0.85, // colormap + clim come from the dataset hints (blues, 0-10)
-  });
-  const wind = new ParticlesLayer({
-    id: "vane-wind",
-    dataset: ds,
-    variable: "wind",
-    speedRange: [0, 18],
-    opacity: 0.9,
-  });
+  // Build layers for whatever the dataset carries.
+  const layers: DemoLayer[] = [];
+  let legend: { colormap: Colormap; clim: [number, number]; unit: string } | null = null;
+
+  if (meta.variables["temperature"]) {
+    const clim = ds.variableMeta("temperature").default_clim ?? [0, 30];
+    layers.push({
+      toggleId: "toggle-temp",
+      label: "temperature",
+      layer: new ColormapLayer({
+        id: "vane-temperature",
+        dataset: ds,
+        variable: "temperature",
+        opacity: 0.65,
+      }),
+    });
+    legend = { colormap: "thermal", clim, unit: "°C" };
+  }
+  if (meta.variables["precipitation"]) {
+    layers.push({
+      toggleId: "toggle-precip",
+      label: "rain",
+      layer: new ColormapLayer({
+        id: "vane-precipitation",
+        dataset: ds,
+        variable: "precipitation",
+        opacity: 0.85,
+      }),
+    });
+    legend ??= {
+      colormap: "blues",
+      clim: ds.variableMeta("precipitation").default_clim ?? [0, 10],
+      unit: " mm/h",
+    };
+  }
+  const hasWind = Object.values(meta.variables).some((v) => v.vector_group === "wind");
+  if (hasWind) {
+    layers.push({
+      toggleId: "toggle-wind",
+      label: "wind",
+      layer: new ParticlesLayer({
+        id: "vane-wind",
+        dataset: ds,
+        variable: "wind",
+        speedRange: [0, 18],
+        opacity: 0.9,
+      }),
+    });
+  }
 
   map.on("load", () => {
-    map.addLayer(temperature);
-    map.addLayer(precipitation);
-    map.addLayer(wind);
+    for (const { layer } of layers) map.addLayer(layer);
   });
 
-  // Legend for the temperature layer.
-  const lut = buildLut("thermal", TEMP_CLIM);
-  const stops: string[] = [];
-  for (let i = 0; i <= 10; i++) {
-    const j = Math.round((i / 10) * 255) * 4;
-    stops.push(`rgb(${lut[j]},${lut[j + 1]},${lut[j + 2]})`);
+  // Toggles: only show the ones that apply to this dataset.
+  const active = new Set(layers.map((l) => l.toggleId));
+  for (const input of document.querySelectorAll<HTMLInputElement>(".toggles input")) {
+    const label = input.parentElement as HTMLElement;
+    if (!active.has(input.id)) {
+      label.style.display = "none";
+      continue;
+    }
+    const entry = layers.find((l) => l.toggleId === input.id)!;
+    input.addEventListener("change", () => {
+      map.setLayoutProperty(entry.layer.id, "visibility", input.checked ? "visible" : "none");
+    });
   }
-  (document.getElementById("legend-bar") as HTMLElement).style.background =
-    `linear-gradient(to right, ${stops.join(",")})`;
-  show("legend-min", `${TEMP_CLIM[0]}°C`);
-  show("legend-max", `${TEMP_CLIM[1]}°C`);
 
-  // Time slider + play loop.
+  // Legend for the primary colormap layer.
+  if (legend) {
+    const lut = buildLut(legend.colormap, legend.clim);
+    const stops: string[] = [];
+    for (let i = 0; i <= 10; i++) {
+      const j = Math.round((i / 10) * 255) * 4;
+      stops.push(`rgba(${lut[j]},${lut[j + 1]},${lut[j + 2]},${lut[j + 3]! / 255})`);
+    }
+    (document.getElementById("legend-bar") as HTMLElement).style.background =
+      `linear-gradient(to right, ${stops.join(",")})`;
+    show("legend-min", `${legend.clim[0]}${legend.unit}`);
+    show("legend-max", `${legend.clim[1]}${legend.unit}`);
+  }
+
+  // Time slider + play loop (radar steps are 5-minutely: play faster).
   const slider = document.getElementById("slider") as HTMLInputElement;
   const playButton = document.getElementById("play") as HTMLButtonElement;
   slider.max = String(meta.timesteps.length - 1);
+  const playMs = meta.source_type === "radar" ? 400 : 900;
 
   const setTimestep = (t: number) => {
     slider.value = String(t);
     show("timestamp", new Date(meta.timesteps[t]!).toUTCString());
-    temperature.setTimestep(t);
-    precipitation.setTimestep(t);
-    wind.setTimestep(t);
+    for (const { layer } of layers) layer.setTimestep(t);
   };
   slider.addEventListener("input", () => setTimestep(Number(slider.value)));
 
@@ -122,26 +171,15 @@ async function main() {
     } else {
       playTimer = setInterval(() => {
         setTimestep((Number(slider.value) + 1) % meta.timesteps.length);
-      }, 900);
+      }, playMs);
       playButton.textContent = "⏸";
     }
   });
 
-  // Layer toggles.
-  const bindToggle = (id: string, layerId: string) => {
-    document.getElementById(id)!.addEventListener("change", (e) => {
-      const on = (e.target as HTMLInputElement).checked;
-      map.setLayoutProperty(layerId, "visibility", on ? "visible" : "none");
-    });
-  };
-  bindToggle("toggle-temp", "vane-temperature");
-  bindToggle("toggle-precip", "vane-precipitation");
-  bindToggle("toggle-wind", "vane-wind");
-
   setTimestep(0);
 
   // debug handles (dev only)
-  (globalThis as Record<string, unknown>).__vane = { map, ds, temperature, precipitation, wind };
+  (globalThis as Record<string, unknown>).__vane = { map, ds, layers };
 }
 
 main().catch((err) => {

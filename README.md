@@ -23,6 +23,15 @@ xarray reads natively.
 | [`examples/demo`](examples/demo) | MapLibre demo: NL temperature + rain colormaps, wind particles, time slider | working |
 | [`pipeline/`](pipeline) | Fetch → convert → publish immutably (timestamped `.vane` + `latest.json` pointer + pruning) | working (Harmonie) |
 
+## Render modes
+
+Capabilities live here (OSS); *styling choices* (colors, clims, opacities)
+are parameters the consumer sets. Available: `colormap` (any scalar field;
+banded/stepped maps work today by repeating stops at the same value) and
+`particles` (any u/v vector group). Planned: `values` (sampled numbers on a
+grid — temperature digits like a model chart), `contours` (isolines),
+`arrows`/barbs.
+
 ## Why
 
 Open weather data (KNMI, DWD, ECMWF, NOAA, Copernicus) is abundant but

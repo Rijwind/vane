@@ -20,11 +20,13 @@ import requests
 API_BASE = "https://api.dataplatform.knmi.nl/open-data/v1"
 DATASET = "harmonie_arome_cy43_p1"
 VERSION = "1.0"
+RADAR_DATASET = "radar_forecast"
+RADAR_VERSION = "2.0"
 
 
-def latest_run_filename(api_key: str) -> str:
+def latest_run_filename(api_key: str, dataset: str = DATASET, version: str = VERSION) -> str:
     response = requests.get(
-        f"{API_BASE}/datasets/{DATASET}/versions/{VERSION}/files",
+        f"{API_BASE}/datasets/{dataset}/versions/{version}/files",
         headers={"Authorization": api_key},
         params={"maxKeys": 1, "orderBy": "created", "sorting": "desc"},
         timeout=30,
@@ -36,9 +38,11 @@ def latest_run_filename(api_key: str) -> str:
     return files[0]["filename"]
 
 
-def download_file(api_key: str, filename: str, dest: Path) -> Path:
+def download_file(
+    api_key: str, filename: str, dest: Path, dataset: str = DATASET, version: str = VERSION
+) -> Path:
     response = requests.get(
-        f"{API_BASE}/datasets/{DATASET}/versions/{VERSION}/files/{filename}/url",
+        f"{API_BASE}/datasets/{dataset}/versions/{version}/files/{filename}/url",
         headers={"Authorization": api_key},
         timeout=30,
     )
@@ -57,6 +61,41 @@ def run_time_from_filename(filename: str) -> datetime:
     if not m:
         raise ValueError(f"cannot parse run time from {filename}")
     return datetime.strptime(m.group(1), "%Y%m%d%H").replace(tzinfo=timezone.utc)
+
+
+def radar_time_from_filename(filename: str) -> datetime:
+    m = re.search(r"(\d{12})", filename)
+    if not m:
+        raise ValueError(f"cannot parse radar time from {filename}")
+    return datetime.strptime(m.group(1), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+
+
+def build_radar_vane(out_path: str | Path, *, api_key: str, filename: str | None = None) -> Path:
+    """Download a radar nowcast file (latest if unspecified) and write it as .vane."""
+    from vane_tools import container
+    from vane_tools.radar import radar_h5_to_variables
+    from vane_tools.writer import write_dataset
+
+    filename = filename or latest_run_filename(api_key, RADAR_DATASET, RADAR_VERSION)
+    with tempfile.TemporaryDirectory(prefix="vane-radar-") as tmp:
+        h5_path = Path(tmp) / filename
+        download_file(api_key, filename, h5_path, RADAR_DATASET, RADAR_VERSION)
+        variables, timesteps, bbox = radar_h5_to_variables(h5_path)
+        store = Path(tmp) / "store.zarr"
+        write_dataset(
+            store,
+            source="knmi_radar_forecast",
+            source_type="radar",
+            model_run=timesteps[0],
+            bbox=bbox,
+            timesteps=timesteps,
+            variables=variables,
+            update_interval_seconds=300,
+        )
+        container.pack(store, out_path)
+    size = Path(out_path).stat().st_size
+    print(f"wrote {out_path} ({size / 1e6:.1f} MB, {len(timesteps)} timesteps)")
+    return Path(out_path)
 
 
 def build_harmonie_vane(
