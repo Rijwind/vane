@@ -1,0 +1,31 @@
+[project]
+# Working title — PyPI name TBD at first publish ("vane-tools" is taken on PyPI).
+name = "vane-tools"
+version = "0.0.1"
+description = "Write Vane (.vane) weather datasets: GRIB/HDF5 -> regrid -> quantize -> Zarr v3 sharded -> single file"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "zarr>=3.0.8",
+    "xarray>=2024.10.0",
+    "cfgrib>=0.9.14",
+    "eccodes>=2.37",
+    "pyproj>=3.6",
+    "requests>=2.31",
+    "click>=8.1",
+]
+
+[project.scripts]
+vane = "vane_tools.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vane_tools"]
+
+[dependency-groups]
+dev = ["pytest>=8"]

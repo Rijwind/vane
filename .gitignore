@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+uv.lock
+
+# data — hoort in object storage, niet in git
+*.vane
+*.grib
+*.grib2
+*.hdf5
+*.nc
+*.zarr/
+data/
+.DS_Store
