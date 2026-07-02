@@ -1,0 +1,28 @@
+{
+  "name": "vane",
+  "version": "0.0.1",
+  "description": "Read and render .vane weather datasets in the browser (Zarr v3 + MapLibre)",
+  "type": "module",
+  "license": "Apache-2.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zarrita": "^0.7.3"
+  },
+  "peerDependencies": {
+    "maplibre-gl": ">=4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "maplibre-gl": "^5.6.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}

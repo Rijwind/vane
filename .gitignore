@@ -9,6 +9,7 @@ uv.lock
 
 # data — hoort in object storage, niet in git
 *.vane
+!packages/vane/test/fixtures/*.vane
 *.grib
 *.grib2
 *.hdf5
