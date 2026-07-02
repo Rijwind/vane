@@ -2,7 +2,13 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { ColormapLayer, ParticlesLayer, VaneDataset, buildLut } from "vane";
 
-const DATA_URL = "/data/demo.vane";
+/**
+ * Data source: `?data=<url>` query param wins; a URL ending in .json is
+ * treated as a `*_latest.json` pointer (the pipeline's output), anything
+ * else as a direct .vane file.
+ */
+const DATA_URL =
+  new URLSearchParams(location.search).get("data") ?? "/data/demo.vane";
 
 function show(id: string, text: string) {
   const el = document.getElementById(id)!;
@@ -10,7 +16,9 @@ function show(id: string, text: string) {
 }
 
 async function main() {
-  const ds = await VaneDataset.open(DATA_URL);
+  const ds = DATA_URL.endsWith(".json")
+    ? await VaneDataset.openLatest(DATA_URL)
+    : await VaneDataset.open(DATA_URL);
   const meta = ds.meta;
   const [west, south, east, north] = meta.bbox;
   const TEMP_CLIM = ds.variableMeta("temperature").default_clim ?? [0, 30];
@@ -59,6 +67,12 @@ async function main() {
     clim: TEMP_CLIM,
     opacity: 0.65,
   });
+  const precipitation = new ColormapLayer({
+    id: "vane-precipitation",
+    dataset: ds,
+    variable: "precipitation",
+    opacity: 0.85, // colormap + clim come from the dataset hints (blues, 0-10)
+  });
   const wind = new ParticlesLayer({
     id: "vane-wind",
     dataset: ds,
@@ -69,6 +83,7 @@ async function main() {
 
   map.on("load", () => {
     map.addLayer(temperature);
+    map.addLayer(precipitation);
     map.addLayer(wind);
   });
 
@@ -93,6 +108,7 @@ async function main() {
     slider.value = String(t);
     show("timestamp", new Date(meta.timesteps[t]!).toUTCString());
     temperature.setTimestep(t);
+    precipitation.setTimestep(t);
     wind.setTimestep(t);
   };
   slider.addEventListener("input", () => setTimestep(Number(slider.value)));
@@ -119,12 +135,13 @@ async function main() {
     });
   };
   bindToggle("toggle-temp", "vane-temperature");
+  bindToggle("toggle-precip", "vane-precipitation");
   bindToggle("toggle-wind", "vane-wind");
 
   setTimestep(0);
 
   // debug handles (dev only)
-  (globalThis as Record<string, unknown>).__vane = { map, ds, temperature, wind };
+  (globalThis as Record<string, unknown>).__vane = { map, ds, temperature, precipitation, wind };
 }
 
 main().catch((err) => {

@@ -48,6 +48,21 @@ export class VaneDataset {
     return new VaneDataset(store, zarr.root(store));
   }
 
+  /**
+   * Resolve a `*_latest.json` pointer and open the immutable `.vane` it
+   * points at (relative names resolve against the pointer URL). Re-call to
+   * pick up a newer run — data files themselves never change.
+   */
+  static async openLatest(pointerUrl: string): Promise<VaneDataset> {
+    const response = await fetch(pointerUrl, { cache: "no-cache" });
+    if (!response.ok) {
+      throw new Error(`failed to fetch pointer ${pointerUrl}: HTTP ${response.status}`);
+    }
+    const pointer = (await response.json()) as { latest?: string };
+    if (!pointer.latest) throw new Error(`pointer ${pointerUrl} has no "latest" field`);
+    return VaneDataset.open(new URL(pointer.latest, response.url).toString());
+  }
+
   get meta(): VaneMetadata {
     return this.store.vane;
   }

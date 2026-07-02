@@ -20,8 +20,8 @@ xarray reads natively.
 | [`packages/vane`](packages/vane) | TypeScript reader (`.vane` → zarrita store) + MapLibre render modes (`colormap`, `particles`) | WIP |
 | [`packages/vane-tools`](packages/vane-tools) | Python writer + CLI: GRIB/HDF5 → regrid → quantize → Zarr v3 sharded → `.vane` | WIP |
 | [`spec/`](spec) | `.vane` container spec + Vane metadata convention | draft |
-| [`examples/demo`](examples/demo) | MapLibre demo: NL temperature colormap + wind particles + time slider | WIP |
-| [`pipeline/`](pipeline) | Reference converters + scheduling for a hosted data endpoint | planned |
+| [`examples/demo`](examples/demo) | MapLibre demo: NL temperature + rain colormaps, wind particles, time slider | working |
+| [`pipeline/`](pipeline) | Fetch → convert → publish immutably (timestamped `.vane` + `latest.json` pointer + pruning) | working (Harmonie) |
 
 ## Why
 
