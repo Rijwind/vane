@@ -19,6 +19,7 @@ from pathlib import Path
 from vane_pipeline.storage import DATA_CACHE_CONTROL, Storage
 
 _STAMP_FMT = "%Y%m%dT%H%MZ"
+CATALOG_NAME = "catalog.json"
 
 
 def data_name(slug: str, run_time: datetime) -> str:
@@ -58,8 +59,32 @@ def publish(
         "model_run": run_time.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     })
+    _update_catalog(storage, slug, vane_path, name)
     prune(storage, slug, keep_days=keep_days)
     return name
+
+
+def _update_catalog(storage: Storage, slug: str, vane_path: Path, name: str) -> None:
+    """Maintain catalog.json: one entry per published source, straight from
+    the .vane's own metadata — the machine-readable answer to "which sources
+    and variables does this endpoint serve?"."""
+    from vane_tools.container import read_info
+
+    attrs = read_info(vane_path)["metadata"]["zarr.json"]["attributes"]["vane"]
+    catalog = storage.get_json(CATALOG_NAME) or {"catalog_version": 1, "sources": {}}
+    catalog["sources"][slug] = {
+        "pointer": pointer_name(slug),
+        "latest": name,
+        "source": attrs["source"],
+        "source_type": attrs["source_type"],
+        "model_run": attrs["model_run"],
+        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "update_interval_seconds": attrs["update_interval_seconds"],
+        "bbox": attrs["bbox"],
+        "timestep_count": len(attrs["timesteps"]),
+        "variables": attrs["variables"],
+    }
+    storage.put_json(CATALOG_NAME, catalog)
 
 
 def prune(storage: Storage, slug: str, *, keep_days: int) -> list[str]:
