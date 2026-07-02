@@ -3,7 +3,6 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { ColormapLayer, ParticlesLayer, VaneDataset, buildLut } from "vane";
 
 const DATA_URL = "/data/demo.vane";
-const TEMP_CLIM: [number, number] = [0, 30];
 
 function show(id: string, text: string) {
   const el = document.getElementById(id)!;
@@ -14,6 +13,7 @@ async function main() {
   const ds = await VaneDataset.open(DATA_URL);
   const meta = ds.meta;
   const [west, south, east, north] = meta.bbox;
+  const TEMP_CLIM = ds.variableMeta("temperature").default_clim ?? [0, 30];
 
   show("title", `Vane demo — ${meta.source}`);
   show(
@@ -68,10 +68,8 @@ async function main() {
   });
 
   map.on("load", () => {
-    console.log("vane: map loaded, adding layers");
     map.addLayer(temperature);
     map.addLayer(wind);
-    console.log("vane: layers added");
   });
 
   // Legend for the temperature layer.
