@@ -105,7 +105,8 @@ def radar_h5_to_variables(
     variables = [
         VaneVariable(
             "precipitation", data, unit="mm/h", scale=0.01,
-            extra_attrs={"default_colormap": "blues", "default_clim": [0, 10]},
+            # clim saturates early: drizzle (0.1-1 mm/h) must be visible
+            extra_attrs={"default_colormap": "blues", "default_clim": [0, 5]},
         ),
     ]
     return variables, timesteps, TARGET_BBOX

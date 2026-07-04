@@ -86,6 +86,17 @@ async function main() {
     legend = { colormap: "thermal", clim, unit: "°C" };
   }
   if (meta.variables["precipitation"]) {
+    // Punchier than the dataset hint: drizzle (0.1–1 mm/h) must be visible,
+    // so the ramp saturates early — the "buienradar look" is styling.
+    const rainStops: Colormap = [
+      [0.0, "#38bdf800"],
+      [0.1, "#7dd3fc"],
+      [0.5, "#38bdf8"],
+      [1.0, "#2563eb"],
+      [2.0, "#7c3aed"],
+      [4.0, "#c026d3"],
+      [8.0, "#f0abfc"],
+    ];
     layers.push({
       toggleId: "toggle-precip",
       label: "rain",
@@ -93,14 +104,11 @@ async function main() {
         id: "vane-precipitation",
         dataset: ds,
         variable: "precipitation",
-        opacity: 0.85,
+        colormap: rainStops,
+        opacity: 0.9,
       }),
     });
-    legend ??= {
-      colormap: "blues",
-      clim: ds.variableMeta("precipitation").default_clim ?? [0, 10],
-      unit: " mm/h",
-    };
+    legend ??= { colormap: rainStops, clim: [0, 8], unit: " mm/h" };
   }
   const hasWind = Object.values(meta.variables).some((v) => v.vector_group === "wind");
   if (hasWind) {
