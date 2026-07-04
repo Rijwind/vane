@@ -7,7 +7,7 @@ license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
     "vane-tools",
-    "boto3>=1.34",
+    "boto3>=1.36",  # request_checksum_calculation config requires >= 1.36
     "apscheduler>=3.10",
 ]
 

@@ -72,8 +72,20 @@ class S3Storage:
 
     def __init__(self, bucket: str, endpoint_url: str | None = None, prefix: str = ""):
         import boto3
+        from botocore.config import Config
 
-        self.client = boto3.client("s3", endpoint_url=endpoint_url)
+        # boto3 >= 1.36 sends streaming SHA-256/CRC checksum trailers by
+        # default; many S3-compatible stores (Ceph-based ones like UpCloud)
+        # reject them with XAmzContentSHA256Mismatch. Only checksum when the
+        # operation requires it.
+        self.client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            config=Config(
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
+            ),
+        )
         self.bucket = bucket
         self.prefix = prefix.strip("/")
 
