@@ -8,6 +8,8 @@ import {
   type Colormap,
 } from "vane";
 
+import { renderCharts, type ChartSeries } from "./charts.js";
+
 /**
  * Data source: `?data=<url>` query param wins; a URL ending in .json is
  * treated as a `*_latest.json` pointer (the pipeline's output), anything
@@ -163,10 +165,83 @@ async function main() {
   slider.max = String(meta.timesteps.length - 1);
   const playMs = meta.source_type === "radar" ? 400 : 900;
 
+  // Point charts: click the map -> temperature / rain / wind graphs there.
+  const chartsPanel = document.getElementById("charts") as HTMLElement;
+  const marker = new maplibregl.Marker({ color: "#4fb6c4", scale: 0.8 });
+  let chartState: { title: string; series: ChartSeries[] } | null = null;
+
+  const drawCharts = () => {
+    if (!chartState) return;
+    chartsPanel.style.display = "block";
+    renderCharts(
+      chartsPanel, chartState.title, meta.timesteps, chartState.series,
+      Number(slider.value),
+    );
+    document.getElementById("charts-close")?.addEventListener("click", () => {
+      chartsPanel.style.display = "none";
+      marker.remove();
+      chartState = null;
+    });
+  };
+
+  map.on("click", async (e) => {
+    const { lng, lat } = e.lngLat;
+    if (lng < west || lng > east || lat < south || lat > north) return;
+    marker.setLngLat(e.lngLat).addTo(map);
+    chartState = {
+      title: `${lat.toFixed(2)}°N ${lng.toFixed(2)}°E <button id="charts-close">✕</button>`,
+      series: [],
+    };
+    chartsPanel.style.display = "block";
+    chartsPanel.innerHTML = `<div class="charts-title">loading point data…</div>`;
+
+    const jobs: Promise<ChartSeries>[] = [];
+    if (meta.variables["temperature"]) {
+      jobs.push(
+        ds.getPointSeries("temperature", lng, lat).then((s) => ({
+          label: "temperature", unit: "°C", values: s.values, kind: "line", color: "#fbb43d",
+        })),
+      );
+    }
+    if (meta.variables["precipitation"]) {
+      jobs.push(
+        ds.getPointSeries("precipitation", lng, lat).then((s) => ({
+          label: "rain", unit: " mm/h", values: s.values, kind: "bar", color: "#38bdf8",
+        })),
+      );
+    }
+    if (hasWind) {
+      const { u, v } = ds.vectorGroup("wind");
+      jobs.push(
+        Promise.all([ds.getPointSeries(u, lng, lat), ds.getPointSeries(v, lng, lat)]).then(
+          ([su, sv]) => ({
+            label: "wind",
+            unit: " m/s",
+            values: su.values.map((uv, i) => {
+              const vv = sv.values[i];
+              return uv === null || vv === null || vv === undefined ? null : Math.hypot(uv, vv);
+            }),
+            kind: "line",
+            color: "#35b779",
+          }),
+        ),
+      );
+    }
+    try {
+      chartState.series = await Promise.all(jobs);
+    } catch (err) {
+      chartsPanel.innerHTML = `<div class="charts-title">failed to load point data</div>`;
+      console.error(err);
+      return;
+    }
+    drawCharts();
+  });
+
   const setTimestep = (t: number) => {
     slider.value = String(t);
     show("timestamp", new Date(meta.timesteps[t]!).toUTCString());
     for (const { layer } of layers) layer.setTimestep(t);
+    drawCharts();
   };
   slider.addEventListener("input", () => setTimestep(Number(slider.value)));
 

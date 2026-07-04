@@ -129,14 +129,15 @@ export class VaneDataset {
     if (lon < west || lon > east || lat < south || lat > north) {
       throw new Error(`(${lon}, ${lat}) is outside the dataset bbox ${this.meta.bbox.join(",")}`);
     }
-    const values: (number | null)[] = [];
-    for (let t = 0; t < this.meta.timesteps.length; t++) {
-      const field = await this.getField(variable, t);
+    const fields = await Promise.all(
+      this.meta.timesteps.map((_, t) => this.getField(variable, t)),
+    );
+    const values = fields.map((field) => {
       const x = Math.round(((lon - west) / (east - west)) * (field.width - 1));
       const y = Math.round(((north - lat) / (north - south)) * (field.height - 1));
       const raw = field.data[y * field.width + x]!;
-      values.push(raw === field.nodata ? null : raw * field.scale + field.offset);
-    }
+      return raw === field.nodata ? null : raw * field.scale + field.offset;
+    });
     return {
       variable,
       unit: meta.unit,

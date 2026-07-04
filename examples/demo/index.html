@@ -34,6 +34,30 @@
         position: absolute; inset: 0; display: none; place-items: center;
         background: #10161c; color: #e6edf3; z-index: 20; padding: 24px; text-align: center;
       }
+      #charts {
+        position: absolute; right: 12px; bottom: 24px; z-index: 10; display: none;
+        background: rgba(16, 22, 28, 0.88); color: #e6edf3;
+        border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px;
+        padding: 12px 14px; width: 320px; backdrop-filter: blur(6px); font-size: 12px;
+      }
+      .charts-title {
+        display: flex; justify-content: space-between; font-weight: 600;
+        font-size: 13px; margin-bottom: 6px;
+      }
+      .chart { margin-top: 8px; }
+      .chart-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
+      .chart-head span:first-child { color: #b7c2cc; }
+      .chart-cur { font-variant-numeric: tabular-nums; font-weight: 600; }
+      .chart-range { margin-left: auto; color: #6c7885; font-size: 11px; }
+      .chart svg { display: block; background: rgba(255, 255, 255, 0.04); border-radius: 4px; }
+      .chart-times {
+        display: flex; justify-content: space-between; color: #6c7885;
+        font-size: 11px; margin-top: 4px;
+      }
+      #charts-close {
+        background: none; border: none; color: #8b98a5; cursor: pointer;
+        font-size: 13px; padding: 0;
+      }
     </style>
   </head>
   <body>
@@ -58,6 +82,7 @@
       </div>
       <div id="attrib"></div>
     </div>
+    <div id="charts"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
