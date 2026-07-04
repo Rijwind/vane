@@ -17,4 +17,7 @@ RUN cd pipeline && uv sync --no-dev
 ENV TMPDIR=/scratch
 RUN mkdir -p /scratch
 
+# stdout is a pipe under Docker; without this, log lines arrive minutes late
+ENV PYTHONUNBUFFERED=1
+
 CMD ["uv", "run", "--directory", "pipeline", "vane-pipeline", "daemon"]
