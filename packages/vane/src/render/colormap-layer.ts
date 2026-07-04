@@ -165,7 +165,14 @@ export class ColormapLayer implements CustomLayerInterface {
 
   private async loadTimestep(timestep: number): Promise<void> {
     const generation = ++this.loadGeneration;
-    const field = await this.dataset.getField(this.variable, timestep);
+    let field;
+    try {
+      field = await this.dataset.getField(this.variable, timestep);
+    } catch (err) {
+      // Keep showing the previous frame; a later setTimestep can recover.
+      console.error(`vane: ${this.id}: failed to load timestep ${timestep}:`, err);
+      return;
+    }
     // A newer request superseded this one while we were fetching.
     if (generation !== this.loadGeneration || !this.gl || !this.fieldTexture) return;
     uploadFieldTexture(this.gl, this.fieldTexture, field);

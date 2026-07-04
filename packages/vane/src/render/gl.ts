@@ -4,8 +4,13 @@ export function compileProgram(
   gl: WebGL2RenderingContext,
   vertexSource: string,
   fragmentSource: string,
+  /** Attribute name → location bindings, applied before linking. */
+  attribLocations?: Record<string, number>,
 ): WebGLProgram {
   const program = gl.createProgram();
+  for (const [name, location] of Object.entries(attribLocations ?? {})) {
+    gl.bindAttribLocation(program, location, name);
+  }
   for (const [type, source] of [
     [gl.VERTEX_SHADER, vertexSource],
     [gl.FRAGMENT_SHADER, fragmentSource],

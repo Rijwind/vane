@@ -84,6 +84,20 @@ describe("VaneDataset", () => {
     await a;
   });
 
+  it("extracts a physical point series for charts", async () => {
+    const ds = await VaneDataset.open(await fixtureReader());
+    const [west, south, east, north] = ds.meta.bbox;
+    const series = await ds.getPointSeries("temperature", (west + east) / 2, (south + north) / 2);
+    expect(series.unit).toBe("celsius");
+    expect(series.values).toHaveLength(ds.meta.timesteps.length);
+    for (const value of series.values) {
+      expect(value).not.toBeNull();
+      expect(value!).toBeGreaterThan(-30);
+      expect(value!).toBeLessThan(45);
+    }
+    await expect(ds.getPointSeries("temperature", 99, 0)).rejects.toThrow(/outside/);
+  });
+
   it("rejects unknown variables and out-of-range timesteps", async () => {
     const ds = await VaneDataset.open(await fixtureReader());
     await expect(ds.getField("nope", 0)).rejects.toThrow(/unknown variable/);

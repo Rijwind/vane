@@ -80,6 +80,7 @@ void main() {
 
 const DRAW_VERTEX = `#version 300 es
 precision highp float;
+in float a_index; // bound to attrib 0: attribute-less draws force slow paths
 uniform sampler2D u_state;
 uniform mat4 u_matrix;
 uniform vec4 u_merc;
@@ -87,7 +88,8 @@ uniform float u_size;
 uniform int u_res;
 out float v_speed;
 void main() {
-  ivec2 coord = ivec2(gl_VertexID % u_res, gl_VertexID / u_res);
+  int index = int(a_index);
+  ivec2 coord = ivec2(index % u_res, index / u_res);
   vec4 state = texelFetch(u_state, coord, 0);
   vec2 merc = mix(u_merc.xy, u_merc.zw, state.rg);
   v_speed = state.b;
@@ -157,7 +159,7 @@ export class ParticlesLayer implements CustomLayerInterface {
   private map: MapLibreMap | null = null;
   private gl: WebGL2RenderingContext | null = null;
   private quadVao: WebGLVertexArrayObject | null = null;
-  private emptyVao: WebGLVertexArrayObject | null = null;
+  private indexVao: WebGLVertexArrayObject | null = null;
   private updateProgram: WebGLProgram | null = null;
   private drawProgram: WebGLProgram | null = null;
   private blitProgram: WebGLProgram | null = null;
@@ -196,9 +198,9 @@ export class ParticlesLayer implements CustomLayerInterface {
       throw new Error("particles mode requires EXT_color_buffer_float");
     }
 
-    this.updateProgram = compileProgram(gl, QUAD_VERTEX, UPDATE_FRAGMENT);
-    this.drawProgram = compileProgram(gl, DRAW_VERTEX, DRAW_FRAGMENT);
-    this.blitProgram = compileProgram(gl, QUAD_VERTEX, BLIT_FRAGMENT);
+    this.updateProgram = compileProgram(gl, QUAD_VERTEX, UPDATE_FRAGMENT, { a_uv: 0 });
+    this.drawProgram = compileProgram(gl, DRAW_VERTEX, DRAW_FRAGMENT, { a_index: 0 });
+    this.blitProgram = compileProgram(gl, QUAD_VERTEX, BLIT_FRAGMENT, { a_uv: 0 });
     this.framebuffer = gl.createFramebuffer();
 
     // Shared unit quad for update/blit passes.
@@ -217,8 +219,21 @@ export class ParticlesLayer implements CustomLayerInterface {
       gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 0, 0);
     }
     gl.bindVertexArray(null);
-    // Particle draw uses gl_VertexID only; still needs a bound VAO.
-    this.emptyVao = gl.createVertexArray();
+
+    // Per-particle index as attrib 0 (attribute-less gl_VertexID draws
+    // trigger slow emulation paths on desktop GL, e.g. Firefox on Mac).
+    this.indexVao = gl.createVertexArray();
+    gl.bindVertexArray(this.indexVao);
+    const indexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      Float32Array.from({ length: this.res * this.res }, (_, i) => i),
+      gl.STATIC_DRAW,
+    );
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 1, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
 
     // Particle state: random start positions, speed 0.
     const initial = new Float32Array(this.res * this.res * 4);
@@ -264,7 +279,7 @@ export class ParticlesLayer implements CustomLayerInterface {
       }
       if (this.framebuffer) gl.deleteFramebuffer(this.framebuffer);
       if (this.quadVao) gl.deleteVertexArray(this.quadVao);
-      if (this.emptyVao) gl.deleteVertexArray(this.emptyVao);
+      if (this.indexVao) gl.deleteVertexArray(this.indexVao);
     }
     this.gl = null;
     this.map = null;
@@ -287,11 +302,19 @@ export class ParticlesLayer implements CustomLayerInterface {
 
   private async loadTimestep(timestep: number): Promise<void> {
     const generation = ++this.loadGeneration;
-    const { u, v } = this.dataset.vectorGroup(this.group);
-    const [uField, vField] = await Promise.all([
-      this.dataset.getField(u, timestep),
-      this.dataset.getField(v, timestep),
-    ]);
+    let uField: Field;
+    let vField: Field;
+    try {
+      const { u, v } = this.dataset.vectorGroup(this.group);
+      [uField, vField] = await Promise.all([
+        this.dataset.getField(u, timestep),
+        this.dataset.getField(v, timestep),
+      ]);
+    } catch (err) {
+      // Keep showing the previous frame; a later setTimestep can recover.
+      console.error(`vane: ${this.id}: failed to load timestep ${timestep}:`, err);
+      return;
+    }
     if (generation !== this.loadGeneration || !this.gl || !this.windTexture) return;
     this.uploadWind(this.gl, uField, vField);
     this.windReady = true;
@@ -406,7 +429,7 @@ export class ParticlesLayer implements CustomLayerInterface {
     }
 
     gl.useProgram(this.drawProgram!);
-    gl.bindVertexArray(this.emptyVao);
+    gl.bindVertexArray(this.indexVao);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.activeTexture(gl.TEXTURE0);

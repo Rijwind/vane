@@ -162,19 +162,40 @@ function parseHeader(bytes: Uint8Array): VaneHeader {
   };
 }
 
-/** RangeReader over HTTP(S) using `Range` headers. */
+/** RangeReader over HTTP(S) using `Range` headers.
+ *
+ * Defensive against Safari/WebKit: once the browser cache holds a full 200
+ * response (e.g. a CDN answering a cold-cache range request with the whole
+ * file), WebKit serves ALL subsequent ranged fetches from that cache entry
+ * as status-200 full bodies — and under concurrent requests those bodies
+ * can arrive truncated. A truncated body sliced at `offset` yields corrupt
+ * chunks, so 200-responses shorter than `offset + length` are retried with
+ * `cache: "no-store"` to force a real network fetch.
+ */
 export function httpReader(url: string, init?: RequestInit): RangeReader {
-  return async (offset, length) => {
+  const fetchRange = async (
+    offset: number,
+    length: number,
+    cache: RequestCache,
+  ): Promise<{ status: number; bytes: Uint8Array }> => {
     const response = await fetch(url, {
       ...init,
+      cache,
       headers: { ...init?.headers, Range: `bytes=${offset}-${offset + length - 1}` },
     });
     if (!(response.status === 206 || response.status === 200)) {
       throw new Error(`range request failed: HTTP ${response.status} for ${url}`);
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    // A 200 means the server ignored the Range header; slice locally.
-    return response.status === 200 ? bytes.subarray(offset, offset + length) : bytes;
+    return { status: response.status, bytes: new Uint8Array(await response.arrayBuffer()) };
+  };
+
+  return async (offset, length) => {
+    const { status, bytes } = await fetchRange(offset, length, "no-store");
+    if (status === 200) {
+      // Server ignored the Range header; slice locally.
+      return bytes.subarray(offset, Math.min(offset + length, bytes.length));
+    }
+    return bytes;
   };
 }
 

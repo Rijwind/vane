@@ -28,6 +28,17 @@ export interface Field {
   timestep: number;
 }
 
+export interface PointSeries {
+  variable: string;
+  unit: string;
+  lon: number;
+  lat: number;
+  /** ISO-8601 UTC, one per value. */
+  timesteps: string[];
+  /** Physical values; null = nodata at that step. */
+  values: (number | null)[];
+}
+
 export class VaneDataset {
   private arrays = new Map<string, zarr.Array<"int16", VaneStore>>();
   private fields = new Map<string, Promise<Field>>();
@@ -103,6 +114,37 @@ export class VaneDataset {
       this.fields.set(key, field);
     }
     return field;
+  }
+
+  /**
+   * Time series of one variable at a location — the chart/meteogram
+   * counterpart of {@link getField}. Values are physical (unit in the
+   * result). Fetches every timestep chunk of the variable, so cost ≈ the
+   * variable's full (compressed) data; fields land in the same cache the
+   * map layers use, so a series next to an animated map is nearly free.
+   */
+  async getPointSeries(variable: string, lon: number, lat: number): Promise<PointSeries> {
+    const meta = this.variableMeta(variable);
+    const [west, south, east, north] = this.meta.bbox;
+    if (lon < west || lon > east || lat < south || lat > north) {
+      throw new Error(`(${lon}, ${lat}) is outside the dataset bbox ${this.meta.bbox.join(",")}`);
+    }
+    const values: (number | null)[] = [];
+    for (let t = 0; t < this.meta.timesteps.length; t++) {
+      const field = await this.getField(variable, t);
+      const x = Math.round(((lon - west) / (east - west)) * (field.width - 1));
+      const y = Math.round(((north - lat) / (north - south)) * (field.height - 1));
+      const raw = field.data[y * field.width + x]!;
+      values.push(raw === field.nodata ? null : raw * field.scale + field.offset);
+    }
+    return {
+      variable,
+      unit: meta.unit,
+      lon,
+      lat,
+      timesteps: [...this.meta.timesteps],
+      values,
+    };
   }
 
   private async readField(variable: string, timestep: number): Promise<Field> {
