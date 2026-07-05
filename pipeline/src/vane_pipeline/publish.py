@@ -82,6 +82,7 @@ def _update_catalog(storage: Storage, slug: str, vane_path: Path, name: str) -> 
         "update_interval_seconds": attrs["update_interval_seconds"],
         "bbox": attrs["bbox"],
         "timestep_count": len(attrs["timesteps"]),
+        "size_bytes": vane_path.stat().st_size,
         "variables": attrs["variables"],
     }
     storage.put_json(CATALOG_NAME, catalog)

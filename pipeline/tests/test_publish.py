@@ -50,6 +50,7 @@ def test_publish_writes_immutable_file_pointer_and_catalog(tmp_path, vane_file):
     assert entry["latest"] == name
     assert entry["source"] == "test_source"
     assert entry["timestep_count"] == 2
+    assert entry["size_bytes"] == vane_file.stat().st_size
     assert "temperature" in entry["variables"]
     assert entry["variables"]["wind_u"]["vector_group"] == "wind"
 
