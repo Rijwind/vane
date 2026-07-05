@@ -32,8 +32,11 @@ out float v_t;
 const float PI = 3.141592653589793;
 
 vec2 toMercator(vec2 lonlat) {
+  // Clamp to the web-mercator latitude limit: global datasets anchor
+  // arrows at +-90 degrees, which would otherwise project to infinity.
+  float lat = clamp(lonlat.y, -85.051129, 85.051129);
   float x = (lonlat.x + 180.0) / 360.0;
-  float y = (1.0 - log(tan(PI * 0.25 + radians(lonlat.y) * 0.5)) / PI) / 2.0;
+  float y = (1.0 - log(tan(PI * 0.25 + radians(lat) * 0.5)) / PI) / 2.0;
   return vec2(x, y);
 }
 

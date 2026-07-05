@@ -64,11 +64,19 @@ export function projectionMatrix(matrixOrOptions: unknown): Float32Array {
   return new Float32Array(matrix);
 }
 
-/** Web-mercator [0,1] coordinates of a lon/lat (x east, y south). */
+/** Web-mercator's latitude limit; global datasets have bboxes to ±90. */
+export const MAX_MERCATOR_LAT = 85.051129;
+
+/**
+ * Web-mercator [0,1] coordinates of a lon/lat (x east, y south).
+ * Latitude is clamped to the mercator limit — a global bbox reaching ±90°
+ * would otherwise project to infinity and poison the quad geometry.
+ */
 export function mercator(lon: number, lat: number): [number, number] {
+  const clamped = Math.min(Math.max(lat, -MAX_MERCATOR_LAT), MAX_MERCATOR_LAT);
   const x = (lon + 180) / 360;
   const y =
-    (1 - Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) / Math.PI) / 2;
+    (1 - Math.log(Math.tan(Math.PI / 4 + (clamped * Math.PI) / 360)) / Math.PI) / 2;
   return [x, y];
 }
 

@@ -21,7 +21,8 @@ is a cheap no-op — so the daemon simply polls every few minutes.
 | `harmonie` | KNMI Harmonie cy43 P1 (NL, 2km) | hourly runs, poll 10 min | ✅ |
 | `radar` | KNMI radar nowcast (NL, 1km, 5 min) | 5 min, poll 3 min | ✅ |
 | `icon-eu` | DWD ICON-EU (Europe, 7km) | 00/06/12/18Z, poll 20 min | ✅ (no API key needed) |
-| ecmwf | ECMWF IFS open data (global, 0.25°) | 4 runs/day | phase 3 |
+| `icon-d2` | DWD ICON-D2 (central Europe, 2.2km) | every 3h, poll 20 min | ✅ (no API key needed) |
+| `ecmwf` | ECMWF IFS open data (global, 0.25°, 3-hourly steps) | 00/06/12/18Z, poll 30 min | ✅ (no API key needed) |
 
 Per-source quirks (GRIB editions, grids, wind rotation, accumulation
 semantics): see [SOURCES.md](SOURCES.md).
@@ -57,10 +58,11 @@ docker run -e VANE_STORAGE=s3:… -e VANE_S3_ENDPOINT=… \
 ```
 
 Sizing: ~1–2 GB RAM during Harmonie conversion, ~2.5 GB scratch disk per
-run (tar + extracted GRIBs); the ICON-EU job peaks higher (~2.5–3 GB RAM
-for the 7 float32 full-domain stacks, ~1 GB scratch) and uploads ~300 MB
-per publication. One small worker VPS still fits, but give it ≥4 GB RAM
-with ICON enabled.
+run (tar + extracted GRIBs); the ICON-EU/D2 jobs peak at ~1.5 GB RAM each
+(preallocated float32 stacks, transformed in place) and upload ~230–300 MB
+per publication; ECMWF is light (~120 MB publications via index ranges).
+One small worker VPS still fits, but give it ≥4 GB RAM with the ICON
+nests enabled. Rolling 7-day bucket across all five sources ≈ 35 GB.
 
 The bucket/CDN in front must serve HTTP range requests and CORS:
 

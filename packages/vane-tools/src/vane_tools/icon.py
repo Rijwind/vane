@@ -1,28 +1,32 @@
-"""DWD ICON-EU open data → Vane variables.
+"""DWD ICON open data (ICON-EU + ICON-D2) → Vane variables.
 
-ICON-EU's "europe regular-lat-lon" product is WMO-clean GRIB2 on a regular
-0.0625° grid (1377×657, 29.5–70.5°N / 23.5°W–62.5°E), earth-relative winds
-— no regridding, no local tables (unlike Harmonie). Downloads come from
-https://opendata.dwd.de/weather/nwp/icon-eu/grib/<HH>/<var>/, one bzip2'd
-file per (run, lead hour, variable); each file holds exactly one GRIB
-message, so no in-file selection is needed either.
+Both nests are published as WMO-clean `regular-lat-lon` GRIB2 on
+opendata.dwd.de — no regridding, no local tables (unlike Harmonie), and
+each file holds exactly one message, so no in-file selection either:
 
-Gotchas handled here (see pipeline/SOURCES.md):
-- GRIB2 longitudes are 0–360 (first point 336.5°) → wrapped to -23.5.
+- **ICON-EU** (`icon-eu_europe`): 0.0625°, 1377×657,
+  29.5–70.5°N / 23.5°W–62.5°E. Main cycles 00/06/12/18Z reach 120h
+  (intermediate 3h cycles stop at 30h and are skipped by the 48h probe).
+- **ICON-D2** (`icon-d2_germany`): 0.02°, ~1215×746, central Europe.
+  Runs every 3h, all reaching 48h. Filenames differ from EU in two ways:
+  a `_2d` infix and a *lowercase* variable part
+  (`…_000_2d_t_2m.grib2.bz2` vs EU's `…_000_T_2M.grib2.bz2`).
+
+Shared gotchas handled here (see pipeline/SOURCES.md):
+- GRIB2 longitudes are 0–360 (domains cross 0°) → wrapped to -180..180.
 - jScansPositively=1 → rows flipped so row 0 = north.
 - TOT_PREC is accumulated since run start → differenced to mm/h.
 - VMAX_10M is already a gust *magnitude* (max over the previous output
   step), unlike Harmonie's u/v gust components.
-- Only the main cycles (00/06/12/18Z) reach 48h+; the intermediate
-  03/09/15/21Z runs stop at 30h and are skipped.
 - DWD keeps one run per cycle directory, replaced in place — a run is
-  only used once its *last* file exists for every variable.
+  only used once its *last* needed file exists for every variable.
 """
 
 from __future__ import annotations
 
 import bz2
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -30,10 +34,9 @@ import numpy as np
 
 from vane_tools.writer import VaneVariable
 
-OPENDATA_BASE = "https://opendata.dwd.de/weather/nwp/icon-eu/grib"
-MAIN_CYCLES = (0, 6, 12, 18)
+OPENDATA_BASE = "https://opendata.dwd.de/weather/nwp"
 
-# our field key -> DWD variable name (directory is lowercase, filename upper)
+# our field key -> DWD variable name (directory is always lowercase)
 _VARIABLES = {
     "t2m": "t_2m",
     "u10": "u_10m",
@@ -45,41 +48,74 @@ _VARIABLES = {
 }
 
 
-def file_name(run: datetime, dwd_var: str, hour: int) -> str:
+@dataclass(frozen=True)
+class IconModel:
+    """Everything that differs between the ICON nests we ingest."""
+
+    name: str  # opendata path segment, e.g. "icon-eu"
+    product: str  # filename prefix, e.g. "icon-eu_europe"
+    infix: str  # "" (EU) or "_2d" (D2)
+    uppercase_var: bool  # EU filenames carry T_2M, D2 carries t_2m
+    cycle_hours: int  # hours between (usable) runs
+    source: str  # Vane metadata source string
+    update_interval: int  # seconds, for the metadata
+
+
+ICON_EU = IconModel(
+    name="icon-eu", product="icon-eu_europe", infix="", uppercase_var=True,
+    cycle_hours=6, source="dwd_icon_eu", update_interval=21600,
+)
+ICON_D2 = IconModel(
+    name="icon-d2", product="icon-d2_germany", infix="_2d", uppercase_var=False,
+    cycle_hours=3, source="dwd_icon_d2", update_interval=10800,
+)
+
+
+def file_name(model: IconModel, run: datetime, dwd_var: str, hour: int) -> str:
     stamp = run.astimezone(timezone.utc).strftime("%Y%m%d%H")
+    var = dwd_var.upper() if model.uppercase_var else dwd_var
     return (
-        f"icon-eu_europe_regular-lat-lon_single-level_{stamp}_{hour:03d}_{dwd_var.upper()}.grib2"
+        f"{model.product}_regular-lat-lon_single-level_{stamp}_{hour:03d}{model.infix}_{var}.grib2"
     )
 
 
-def file_url(run: datetime, dwd_var: str, hour: int) -> str:
+def file_url(model: IconModel, run: datetime, dwd_var: str, hour: int) -> str:
     return (
-        f"{OPENDATA_BASE}/{run:%H}/{dwd_var}/{file_name(run, dwd_var, hour)}.bz2"
+        f"{OPENDATA_BASE}/{model.name}/grib/{run:%H}/{dwd_var}/"
+        f"{file_name(model, run, dwd_var, hour)}.bz2"
     )
 
 
-def latest_complete_run(*, max_hours: int = 48, now: datetime | None = None) -> datetime:
-    """Most recent main-cycle run whose files exist through `max_hours` for
-    every variable we extract (DWD publishes lead hours progressively)."""
+def latest_complete_run(
+    model: IconModel, *, max_hours: int = 48, now: datetime | None = None
+) -> datetime:
+    """Most recent run whose files exist through `max_hours` for every
+    variable we extract (DWD publishes lead hours progressively)."""
     import requests
 
     now = now or datetime.now(timezone.utc)
     candidate = now.replace(minute=0, second=0, microsecond=0)
-    candidate = candidate.replace(hour=max(c for c in MAIN_CYCLES if c <= candidate.hour))
+    candidate = candidate.replace(
+        hour=candidate.hour - candidate.hour % model.cycle_hours
+    )
     session = requests.Session()
-    for _ in range(8):  # two days of main cycles
+    for _ in range(2 * 24 // model.cycle_hours):  # two days of cycles
         complete = all(
-            session.head(file_url(candidate, var, max_hours), timeout=30).status_code == 200
+            session.head(
+                file_url(model, candidate, var, max_hours), timeout=30
+            ).status_code == 200
             for var in _VARIABLES.values()
         )
         if complete:
             return candidate
-        candidate -= timedelta(hours=6)
-    raise RuntimeError(f"no complete ICON-EU run found (checked back to {candidate})")
+        candidate -= timedelta(hours=model.cycle_hours)
+    raise RuntimeError(
+        f"no complete {model.name} run found (checked back to {candidate})"
+    )
 
 
 def download_run(
-    grib_dir: Path, run: datetime, *, max_hours: int = 48, workers: int = 8
+    model: IconModel, grib_dir: Path, run: datetime, *, max_hours: int = 48, workers: int = 8
 ) -> None:
     """Fetch + decompress all (variable, lead hour) files; skips existing."""
     import requests
@@ -88,10 +124,10 @@ def download_run(
     session = requests.Session()
 
     def fetch(dwd_var: str, hour: int) -> None:
-        dest = grib_dir / file_name(run, dwd_var, hour)
+        dest = grib_dir / file_name(model, run, dwd_var, hour)
         if dest.exists():
             return
-        response = session.get(file_url(run, dwd_var, hour), timeout=120)
+        response = session.get(file_url(model, run, dwd_var, hour), timeout=120)
         response.raise_for_status()
         tmp = dest.with_suffix(".tmp")
         tmp.write_bytes(bz2.decompress(response.content))
@@ -104,7 +140,7 @@ def download_run(
 
 
 def _read_field(path: Path) -> tuple[np.ndarray, dict]:
-    """Read the single GRIB2 message in an ICON-EU file (row 0 = north)."""
+    """Read the single GRIB2 message in an ICON file (row 0 = north)."""
     import eccodes
 
     with open(path, "rb") as f:
@@ -115,6 +151,11 @@ def _read_field(path: Path) -> tuple[np.ndarray, dict]:
             ni = eccodes.codes_get(gid, "Ni")
             nj = eccodes.codes_get(gid, "Nj")
             values = eccodes.codes_get_values(gid).reshape(nj, ni)
+            # ICON-D2's rotated domain doesn't fill its bounding rectangle;
+            # the corners are bitmap-masked and read back as missingValue.
+            if eccodes.codes_get(gid, "bitmapPresent") == 1:
+                missing = eccodes.codes_get(gid, "missingValue")
+                values = np.where(values == missing, np.nan, values)
             if eccodes.codes_get(gid, "jScansPositively") == 1:
                 values = values[::-1]
             west = eccodes.codes_get(gid, "longitudeOfFirstGridPointInDegrees")
@@ -140,9 +181,9 @@ def _read_field(path: Path) -> tuple[np.ndarray, dict]:
 
 
 def icon_files_to_variables(
-    grib_dir: Path, run: datetime, *, max_hours: int = 48
+    model: IconModel, grib_dir: Path, run: datetime, *, max_hours: int = 48
 ) -> tuple[list[VaneVariable], list[datetime], tuple[float, float, float, float]]:
-    """Read downloaded ICON-EU files into Vane variables (hours 0..max_hours)."""
+    """Read downloaded ICON files into Vane variables (hours 0..max_hours)."""
     # The full-domain stacks are big (~180 MB float32 per variable, 7
     # variables); fill preallocated arrays and transform in place so the
     # peak stays ~1.5 GB instead of ~3 GB.
@@ -152,7 +193,7 @@ def icon_files_to_variables(
     for key, dwd_var in _VARIABLES.items():
         stack: np.ndarray | None = None
         for index, hour in enumerate(hours):
-            values, g = _read_field(grib_dir / file_name(run, dwd_var, hour))
+            values, g = _read_field(grib_dir / file_name(model, run, dwd_var, hour))
             grid = grid or g
             if stack is None:
                 stack = np.empty((len(hours), *values.shape), dtype=np.float32)
@@ -206,39 +247,50 @@ def icon_files_to_variables(
     return variables, timesteps, bbox
 
 
-def build_icon_eu_vane(
+def build_icon_vane(
     out_path: str | Path,
+    model: IconModel,
     *,
     max_hours: int = 48,
     run: datetime | None = None,
     keep_grib: Path | None = None,
 ) -> tuple[Path, datetime]:
-    """Download the latest complete ICON-EU run and write it as .vane."""
+    """Download the latest complete run of `model` and write it as .vane."""
     import tempfile
 
     from vane_tools import container
     from vane_tools.writer import write_dataset
 
-    run = run or latest_complete_run(max_hours=max_hours)
-    workdir = keep_grib or Path(tempfile.mkdtemp(prefix="vane-icon-"))
-    print(f"downloading ICON-EU {run:%Y-%m-%dT%H}Z (0..{max_hours}h, "
+    run = run or latest_complete_run(model, max_hours=max_hours)
+    workdir = keep_grib or Path(tempfile.mkdtemp(prefix=f"vane-{model.name}-"))
+    print(f"downloading {model.name} {run:%Y-%m-%dT%H}Z (0..{max_hours}h, "
           f"{len(_VARIABLES)} variables) …")
-    download_run(workdir, run, max_hours=max_hours)
+    download_run(model, workdir, run, max_hours=max_hours)
 
-    variables, timesteps, bbox = icon_files_to_variables(workdir, run, max_hours=max_hours)
+    variables, timesteps, bbox = icon_files_to_variables(
+        model, workdir, run, max_hours=max_hours
+    )
     with tempfile.TemporaryDirectory() as tmp:
         store = Path(tmp) / "store.zarr"
         write_dataset(
             store,
-            source="dwd_icon_eu",
+            source=model.source,
             source_type="model",
             model_run=run,
             bbox=bbox,
             timesteps=timesteps,
             variables=variables,
-            update_interval_seconds=21600,
+            update_interval_seconds=model.update_interval,
         )
         container.pack(store, out_path)
     size = Path(out_path).stat().st_size
     print(f"wrote {out_path} ({size / 1e6:.1f} MB, {len(timesteps)} timesteps)")
     return Path(out_path), run
+
+
+def build_icon_eu_vane(out_path: str | Path, **kwargs) -> tuple[Path, datetime]:
+    return build_icon_vane(out_path, ICON_EU, **kwargs)
+
+
+def build_icon_d2_vane(out_path: str | Path, **kwargs) -> tuple[Path, datetime]:
+    return build_icon_vane(out_path, ICON_D2, **kwargs)

@@ -21,7 +21,7 @@ xarray reads natively.
 | [`packages/vane-tools`](packages/vane-tools) | Python writer + CLI: GRIB/HDF5 → regrid → quantize → Zarr v3 sharded → `.vane` | WIP |
 | [`spec/`](spec) | `.vane` container spec + Vane metadata convention | draft |
 | [`examples/demo`](examples/demo) | MapLibre demo: all render modes on live model + radar data, time slider, point meteograms | working |
-| [`pipeline/`](pipeline) | Fetch → convert → publish immutably (timestamped `.vane` + `latest.json` pointer + pruning) | working (Harmonie, radar, ICON-EU) |
+| [`pipeline/`](pipeline) | Fetch → convert → publish immutably (timestamped `.vane` + `latest.json` pointer + pruning) | working (Harmonie, radar, ICON-EU, ICON-D2, ECMWF IFS) |
 
 ## Render modes
 

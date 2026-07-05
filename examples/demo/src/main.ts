@@ -82,11 +82,15 @@ async function main() {
     "subtitle",
     `${meta.timesteps.length} timesteps · run ${meta.model_run} · one .vane file, range requests only`,
   );
-  document.getElementById("attrib")!.innerHTML = meta.source.startsWith("knmi")
-    ? 'data: © <a href="https://dataplatform.knmi.nl/">KNMI</a>, CC-BY-4.0 · basemap © <a href="https://carto.com/">CARTO</a> / OSM'
+  const attribution = meta.source.startsWith("knmi")
+    ? 'data: © <a href="https://dataplatform.knmi.nl/">KNMI</a>, CC-BY-4.0'
     : meta.source.startsWith("dwd")
-      ? 'data: © <a href="https://www.dwd.de/">DWD</a>, CC-BY-4.0 · basemap © <a href="https://carto.com/">CARTO</a> / OSM'
-      : 'synthetic demo data · basemap © <a href="https://carto.com/">CARTO</a> / OSM';
+      ? 'data: © <a href="https://www.dwd.de/">DWD</a>, CC-BY-4.0'
+      : meta.source.startsWith("ecmwf")
+        ? 'data: © <a href="https://www.ecmwf.int/">ECMWF</a>, CC-BY-4.0'
+        : "synthetic demo data";
+  document.getElementById("attrib")!.innerHTML =
+    `${attribution} · basemap © <a href="https://carto.com/">CARTO</a> / OSM`;
 
   const map = new maplibregl.Map({
     container: "map",

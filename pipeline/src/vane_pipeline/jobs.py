@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from vane_tools.icon import build_icon_eu_vane, latest_complete_run
+from vane_tools.icon import ICON_D2, ICON_EU, IconModel, build_icon_vane, latest_complete_run
 from vane_tools.knmi import (
     RADAR_DATASET,
     RADAR_VERSION,
@@ -24,6 +24,8 @@ from vane_pipeline.storage import Storage
 HARMONIE_SLUG = "knmi_harmonie_nl"
 RADAR_SLUG = "knmi_radar_nl"
 ICON_EU_SLUG = "dwd_icon_eu"
+ICON_D2_SLUG = "dwd_icon_d2"
+ECMWF_SLUG = "ecmwf_ifs_global"
 
 
 def run_harmonie(
@@ -56,29 +58,61 @@ def run_harmonie(
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def run_icon_eu(
+def _run_icon(
     storage: Storage,
+    model: IconModel,
+    slug: str,
     *,
     max_hours: int = 48,
     keep_days: int = 7,
 ) -> str | None:
-    """Publish the latest complete ICON-EU run if it isn't published yet.
-    No API key — DWD open data is plain HTTPS."""
-    run_time = latest_complete_run(max_hours=max_hours)
-    if published_run(storage, ICON_EU_SLUG) == run_time:
-        print(f"icon-eu: run {run_time:%Y-%m-%dT%H:%MZ} already published")
+    """Publish the latest complete run of an ICON nest if it isn't
+    published yet. No API key — DWD open data is plain HTTPS."""
+    run_time = latest_complete_run(model, max_hours=max_hours)
+    if published_run(storage, slug) == run_time:
+        print(f"{model.name}: run {run_time:%Y-%m-%dT%H:%MZ} already published")
         return None
 
-    workdir = Path(tempfile.mkdtemp(prefix="vane-icon-"))
+    workdir = Path(tempfile.mkdtemp(prefix=f"vane-{model.name}-"))
     try:
         vane_path = workdir / "out.vane"
-        build_icon_eu_vane(
+        build_icon_vane(
+            vane_path, model, max_hours=max_hours, run=run_time,
+            keep_grib=workdir / "src",
+        )
+        name = publish(storage, slug, vane_path, run_time=run_time, keep_days=keep_days)
+        print(f"{model.name}: published {name}")
+        return name
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def run_icon_eu(storage: Storage, *, max_hours: int = 48, keep_days: int = 7) -> str | None:
+    return _run_icon(storage, ICON_EU, ICON_EU_SLUG, max_hours=max_hours, keep_days=keep_days)
+
+
+def run_icon_d2(storage: Storage, *, max_hours: int = 48, keep_days: int = 7) -> str | None:
+    return _run_icon(storage, ICON_D2, ICON_D2_SLUG, max_hours=max_hours, keep_days=keep_days)
+
+
+def run_ecmwf(storage: Storage, *, max_hours: int = 48, keep_days: int = 7) -> str | None:
+    """Publish the latest complete ECMWF IFS open-data run if it isn't
+    published yet. No API key — data.ecmwf.int is plain HTTPS."""
+    from vane_tools.ecmwf import build_ecmwf_vane, latest_complete_run as ecmwf_latest
+
+    run_time = ecmwf_latest(max_hours=max_hours)
+    if published_run(storage, ECMWF_SLUG) == run_time:
+        print(f"ecmwf: run {run_time:%Y-%m-%dT%H:%MZ} already published")
+        return None
+
+    workdir = Path(tempfile.mkdtemp(prefix="vane-ecmwf-"))
+    try:
+        vane_path = workdir / "out.vane"
+        build_ecmwf_vane(
             vane_path, max_hours=max_hours, run=run_time, keep_grib=workdir / "src"
         )
-        name = publish(
-            storage, ICON_EU_SLUG, vane_path, run_time=run_time, keep_days=keep_days
-        )
-        print(f"icon-eu: published {name}")
+        name = publish(storage, ECMWF_SLUG, vane_path, run_time=run_time, keep_days=keep_days)
+        print(f"ecmwf: published {name}")
         return name
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

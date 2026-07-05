@@ -17,7 +17,7 @@ from pathlib import Path
 
 import click
 
-from vane_pipeline.jobs import run_harmonie, run_icon_eu, run_radar
+from vane_pipeline.jobs import run_ecmwf, run_harmonie, run_icon_d2, run_icon_eu, run_radar
 from vane_pipeline.storage import storage_from_env
 
 
@@ -58,17 +58,35 @@ def icon_eu(max_hours: int, keep_days: int) -> None:
     run_icon_eu(storage_from_env(), max_hours=max_hours, keep_days=keep_days)
 
 
+@main.command("icon-d2")
+@click.option("--max-hours", default=48, show_default=True)
+@click.option("--keep-days", default=7, show_default=True)
+def icon_d2(max_hours: int, keep_days: int) -> None:
+    """Publish the latest DWD ICON-D2 run (no-op if already current)."""
+    run_icon_d2(storage_from_env(), max_hours=max_hours, keep_days=keep_days)
+
+
+@main.command("ecmwf")
+@click.option("--max-hours", default=48, show_default=True)
+@click.option("--keep-days", default=7, show_default=True)
+def ecmwf(max_hours: int, keep_days: int) -> None:
+    """Publish the latest ECMWF IFS open-data run (no-op if already current)."""
+    run_ecmwf(storage_from_env(), max_hours=max_hours, keep_days=keep_days)
+
+
 @main.command()
 @click.option("--harmonie-minutes", default=10, show_default=True,
               help="How often to check for a new Harmonie run")
 @click.option("--radar-minutes", default=3, show_default=True,
               help="How often to check for a new radar nowcast")
 @click.option("--icon-minutes", default=20, show_default=True,
-              help="How often to check for a new ICON-EU run")
+              help="How often to check for new ICON-EU/ICON-D2 runs")
+@click.option("--ecmwf-minutes", default=30, show_default=True,
+              help="How often to check for a new ECMWF IFS run")
 @click.option("--max-hours", default=48, show_default=True)
 @click.option("--keep-days", default=7, show_default=True)
 def daemon(harmonie_minutes: int, radar_minutes: int, icon_minutes: int,
-           max_hours: int, keep_days: int) -> None:
+           ecmwf_minutes: int, max_hours: int, keep_days: int) -> None:
     """Run forever: poll for new runs and publish them.
 
     Polling is cheap (one list call + pointer read when nothing changed),
@@ -108,6 +126,12 @@ def daemon(harmonie_minutes: int, radar_minutes: int, icon_minutes: int,
     def icon_tick() -> None:
         guarded("icon-eu", lambda: run_icon_eu(
             storage, max_hours=max_hours, keep_days=keep_days))
+        guarded("icon-d2", lambda: run_icon_d2(
+            storage, max_hours=max_hours, keep_days=keep_days))
+
+    def ecmwf_tick() -> None:
+        guarded("ecmwf", lambda: run_ecmwf(
+            storage, max_hours=max_hours, keep_days=keep_days))
 
     scheduler = BlockingScheduler(timezone="UTC")
     # NB: no next_run_time=None here — in APScheduler that means "add the
@@ -118,13 +142,16 @@ def daemon(harmonie_minutes: int, radar_minutes: int, icon_minutes: int,
     scheduler.add_job(harmonie_tick, "interval", minutes=harmonie_minutes)
     scheduler.add_job(radar_tick, "interval", minutes=radar_minutes)
     scheduler.add_job(icon_tick, "interval", minutes=icon_minutes)
+    scheduler.add_job(ecmwf_tick, "interval", minutes=ecmwf_minutes)
     scheduler.add_job(beat, "interval", seconds=60)
     print(f"vane-pipeline daemon: harmonie every {harmonie_minutes}m, "
-          f"radar every {radar_minutes}m, icon-eu every {icon_minutes}m")
+          f"radar every {radar_minutes}m, icon-eu+d2 every {icon_minutes}m, "
+          f"ecmwf every {ecmwf_minutes}m")
     beat()
     harmonie_tick()
     radar_tick()
     icon_tick()
+    ecmwf_tick()
     scheduler.start()
 
 

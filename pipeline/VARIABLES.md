@@ -11,16 +11,16 @@ extracted (usually a ~5-line converter change) · — not available.
 
 ## Surface variables × sources
 
-| Variable | Unit | KNMI Harmonie P1 | KNMI radar | DWD ICON-EU | ECMWF IFS open | Notes |
+| Variable | Unit | KNMI Harmonie P1 | KNMI radar | DWD ICON-EU + D2 | ECMWF IFS open | Notes |
 |---|---|---|---|---|---|---|
-| temperature (2m) | °C | ✅ (param 11, lvl 2) | — | ✅ (T_2M) | ⬜ | GRIB gives Kelvin; converters store °C |
-| wind u/v (10m) | m/s | ✅ (33/34, lvl 10) | — | ✅ (U_10M/V_10M) | ⬜ | vector pair, `vector_group: wind` |
-| precipitation rate | mm/h | ✅ (61, tri=4, differenced) | ✅ (calibrated, ×12) | ✅ (TOT_PREC, differenced) | ⬜ | model = accumulation → difference per step; radar = measured, much sharper |
-| wind gusts (10m) | m/s | ✅ (162/163, tri=2 → magnitude) | — | ✅ (VMAX_10M, already magnitude) | ⬜ | stored as scalar `wind_gust` (hourly max); direction adds little over mean wind, halves bytes |
+| temperature (2m) | °C | ✅ (param 11, lvl 2) | — | ✅ (T_2M) | ✅ (2t) | GRIB gives Kelvin; converters store °C |
+| wind u/v (10m) | m/s | ✅ (33/34, lvl 10) | — | ✅ (U_10M/V_10M) | ✅ (10u/10v) | vector pair, `vector_group: wind` |
+| precipitation rate | mm/h | ✅ (61, tri=4, differenced) | ✅ (calibrated, ×12) | ✅ (TOT_PREC, differenced) | ✅ (tp, m → mm, differenced ÷3h) | model = accumulation → difference per step; radar = measured, much sharper |
+| wind gusts (10m) | m/s | ✅ (162/163, tri=2 → magnitude) | — | ✅ (VMAX_10M, already magnitude) | ✅ (10fg, already magnitude) | stored as scalar `wind_gust` (hourly max); direction adds little over mean wind, halves bytes |
 | dew point (2m) | °C | ⬜ (17, lvl 2) | — | ⬜ (TD_2M) | ⬜ | |
 | relative humidity (2m) | % | ⬜ (52, lvl 2) | — | ⬜ (RELHUM_2M) | ⬜ | Harmonie source is fraction 0–1 → ×100 |
-| pressure (MSL) | hPa | ✅ (1, levtype "103", Pa → /100) | — | ✅ (PMSL, Pa → /100) | ⬜ | `default_mode: contours`, `contour_interval: 4` |
-| cloud cover total | % | ✅ (71, fraction → ×100) | — | ✅ (CLCT, already %) | ⬜ | P1 also has high/mid/low (75/74/73) |
+| pressure (MSL) | hPa | ✅ (1, levtype "103", Pa → /100) | — | ✅ (PMSL, Pa → /100) | ✅ (msl, Pa → /100) | `default_mode: contours`, `contour_interval: 4` |
+| cloud cover total | % | ✅ (71, fraction → ×100) | — | ✅ (CLCT, already %) | ✅ (tcc, fraction → ×100) | P1 also has high/mid/low (75/74/73) |
 | visibility | m | ⬜ (20) | — | ⬜ (VIS) | — | |
 | snow depth | m | ⬜ (66) | — | ⬜ (H_SNOW) | ⬜ | |
 | global radiation | W/m² | ⬜ (117, tri=4) | — | ⬜ (ASWDIR_S + ASWDIFD_S) | ⬜ | accumulated → difference, like precip |

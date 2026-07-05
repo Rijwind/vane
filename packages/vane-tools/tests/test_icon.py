@@ -6,17 +6,22 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vane_tools.icon import _read_field, file_name, file_url
+from vane_tools.icon import ICON_D2, ICON_EU, _read_field, file_name, file_url
 
 
 def test_file_naming() -> None:
     run = datetime(2026, 7, 4, 18, tzinfo=timezone.utc)
-    assert file_name(run, "t_2m", 0) == (
+    assert file_name(ICON_EU, run, "t_2m", 0) == (
         "icon-eu_europe_regular-lat-lon_single-level_2026070418_000_T_2M.grib2"
     )
-    assert file_url(run, "tot_prec", 48) == (
+    assert file_url(ICON_EU, run, "tot_prec", 48) == (
         "https://opendata.dwd.de/weather/nwp/icon-eu/grib/18/tot_prec/"
         "icon-eu_europe_regular-lat-lon_single-level_2026070418_048_TOT_PREC.grib2.bz2"
+    )
+    # D2 differs: `_2d` infix + lowercase variable part.
+    assert file_url(ICON_D2, run, "vmax_10m", 12) == (
+        "https://opendata.dwd.de/weather/nwp/icon-d2/grib/18/vmax_10m/"
+        "icon-d2_germany_regular-lat-lon_single-level_2026070418_012_2d_vmax_10m.grib2.bz2"
     )
 
 

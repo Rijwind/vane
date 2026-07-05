@@ -115,5 +115,33 @@ def icon_eu(out_path: str, max_hours: int, keep_grib: str | None) -> None:
                        keep_grib=Path(keep_grib) if keep_grib else None)
 
 
+@main.command("icon-d2")
+@click.argument("out_path", type=click.Path(dir_okay=False))
+@click.option("--max-hours", default=48, show_default=True,
+              help="Forecast hours to include")
+@click.option("--keep-grib", type=click.Path(file_okay=False), default=None,
+              help="Directory to keep the downloaded GRIBs (skips re-download)")
+def icon_d2(out_path: str, max_hours: int, keep_grib: str | None) -> None:
+    """Download the latest DWD ICON-D2 run and convert it to .vane (no key needed)."""
+    from vane_tools.icon import build_icon_d2_vane
+
+    build_icon_d2_vane(out_path, max_hours=max_hours,
+                       keep_grib=Path(keep_grib) if keep_grib else None)
+
+
+@main.command("ecmwf")
+@click.argument("out_path", type=click.Path(dir_okay=False))
+@click.option("--max-hours", default=48, show_default=True,
+              help="Forecast hours to include (3-hourly steps)")
+@click.option("--keep-grib", type=click.Path(file_okay=False), default=None,
+              help="Directory to keep the downloaded GRIBs (skips re-download)")
+def ecmwf(out_path: str, max_hours: int, keep_grib: str | None) -> None:
+    """Download the latest ECMWF IFS 0.25° open-data run and convert it to .vane."""
+    from vane_tools.ecmwf import build_ecmwf_vane
+
+    build_ecmwf_vane(out_path, max_hours=max_hours,
+                     keep_grib=Path(keep_grib) if keep_grib else None)
+
+
 if __name__ == "__main__":
     main()

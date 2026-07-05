@@ -51,7 +51,7 @@ converter learns something new.
 - Pixel values are scaled ints with a calibration formula in the HDF5 attrs.
 - 5-minute cadence; nowcast product carries +2h of 5-min steps.
 
-## DWD ICON-EU (implemented — `icon.py`) / ICON-D2 (later)
+## DWD ICON-EU + ICON-D2 (implemented — `icon.py`)
 
 - **Good news:** DWD publishes the EU nest and D2 as
   `regular-lat-lon` GRIB2 files on opendata.dwd.de — the icosahedral-grid
@@ -75,6 +75,14 @@ converter learns something new.
   current int16 `scale=0.01` — a 48h publication ≈ 300 MB. If that ever
   hurts, the knob is coarser quantization (e.g. 0.05 °C) or fewer
   variables, not the format.
+- **ICON-D2 specifics** (same converter, `IconModel` config): 0.02°
+  (~2.2 km), central Europe, runs every 3h, all reaching 48h. Filenames
+  differ from EU twice over: a `_2d` infix AND a lowercase variable part
+  (`…_000_2d_t_2m` vs EU's `…_000_T_2M`). **The rotated D2 domain doesn't
+  fill its regular-lat-lon bounding box** — the corners are bitmap-masked
+  and read back as `missingValue` (9999); map them to NaN or they render
+  as clim-max garbage. (`bitmapPresent` check in `_read_field`, applies
+  to any source.)
 
 ## DWD ICON global (phase 3+, only if we want it)
 
@@ -92,12 +100,27 @@ converter learns something new.
   you download only the fields you need).
 - Longitude 0–360 wrap applies.
 
-## ECMWF IFS open data (phase 3)
+## ECMWF IFS open data (implemented — `ecmwf.py`)
 
-- Open data is GRIB2, 0.25° regular grid, CC-BY-4.0. The GRIB1→GRIB2
-  migration only matters for archive products (ERA5) — not for the real-time
-  open data feed.
-- Longitude 0–360 wrap applies.
+- Open data is GRIB2, 0.25° regular global grid (1440×721), CC-BY-4.0,
+  no key. One file per (run, step) with **all** parameters + a `.index`
+  sidecar (JSON lines with `_offset`/`_length` per message) → fetch the
+  index, then one HTTP range request per wanted field: a 48h ingest
+  moves ~50 MB, not multi-GB files.
+- Layout `data.ecmwf.int/forecasts/YYYYMMDD/HHz/ifs/0p25/<stream>/…`;
+  stream = `oper` for 00/12Z, `scda` for 06/18Z. Published ~7–8h after
+  cycle time, steps progressively — probe the *last* step's index.
+- Steps are **3-hourly** (not hourly) to 144h; `timesteps` metadata
+  carries the real times.
+- **Global grid starts at 0°** → roll columns so the array starts at
+  -180 (classic "Europe on the wrong side" wrap, plus Vane bboxes are
+  -180..180). Verified against eccodes' own nearest-neighbor on three
+  continents.
+- Unit quirks: `tp` is accumulated **meters** (→ ×1000, difference, ÷3
+  → mm/h); `tcc` is a 0–1 fraction (→ ×100); `10fg` is already a gust
+  magnitude (max since previous step).
+- Renderer note: a bbox reaching ±90° must be clamped to web-mercator's
+  ±85.051° when projecting (done in `packages/vane` `gl.ts`/arrows).
 
 ## Tooling notes
 
