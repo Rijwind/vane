@@ -37,6 +37,10 @@ export interface VaneVariableMeta {
   vector_component?: "u" | "v";
   default_colormap?: string;
   default_clim?: [number, number];
+  /** Hint: the render mode this variable is meant for (e.g. "contours"). */
+  default_mode?: string;
+  /** Hint: iso-line spacing for the contours mode, physical units. */
+  contour_interval?: number;
 }
 
 /** The `vane` block in the root group attributes (spec/vane-metadata.md). */

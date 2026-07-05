@@ -21,6 +21,10 @@ const BUILTIN: Record<string, string[]> = {
   blues: [
     "#2171b500", "#c6dbef", "#6baed6", "#2171b5", "#08306b", "#54278f",
   ],
+  // For cloud-cover-like fields: clear sky transparent, overcast white-ish.
+  clouds: [
+    "#ffffff00", "#ffffff12", "#ffffff30", "#ffffff55", "#ffffff80", "#ffffffa8",
+  ],
 };
 
 export function parseColor(hex: string): [number, number, number, number] {
