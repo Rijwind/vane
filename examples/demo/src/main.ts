@@ -5,8 +5,14 @@ import {
   ColormapLayer,
   ContoursLayer,
   ParticlesLayer,
+  PRECIPITATION_CLIM,
+  PRECIPITATION_STOPS,
+  TEMPERATURE_CLIM,
+  TEMPERATURE_STOPS,
   ValuesLayer,
   VaneDataset,
+  WIND_GUST_CLIM,
+  WIND_GUST_STOPS,
   buildLut,
   type Colormap,
 } from "@rijwind/vane";
@@ -136,25 +142,6 @@ async function main() {
   let legend: { colormap: Colormap; clim: [number, number]; unit: string } | null = null;
 
   if (meta.variables["temperature"]) {
-    // Full meteorological hue ramp instead of the muted "thermal" hint, on
-    // a fixed clim: a few degrees of difference should read on the map, and
-    // the same temperature should be the same color in every dataset.
-    const tempStops: Colormap = [
-      [-30, "#7c3aed"],
-      [-20, "#6366f1"],
-      [-10, "#3b82f6"],
-      [-5, "#0ea5e9"],
-      [0, "#22d3ee"],
-      [5, "#2dd4bf"],
-      [10, "#4ade80"],
-      [15, "#a3e635"],
-      [20, "#facc15"],
-      [25, "#fb923c"],
-      [30, "#ef4444"],
-      [35, "#b91c1c"],
-      [45, "#7f1d1d"],
-    ];
-    const tempClim: [number, number] = [-30, 45];
     layers.push(
       customLayer(
         "temperature",
@@ -163,26 +150,15 @@ async function main() {
           id: "vane-temperature",
           dataset: ds,
           variable: "temperature",
-          colormap: tempStops,
-          clim: tempClim,
+          colormap: TEMPERATURE_STOPS,
+          clim: TEMPERATURE_CLIM,
           opacity: 0.7,
         }),
       ),
     );
-    legend = { colormap: tempStops, clim: tempClim, unit: "°C" };
+    legend = { colormap: TEMPERATURE_STOPS, clim: TEMPERATURE_CLIM, unit: "°C" };
   }
   if (meta.variables["precipitation"]) {
-    // Punchier than the dataset hint: drizzle (0.1–1 mm/h) must be visible,
-    // so the ramp saturates early — the "buienradar look" is styling.
-    const rainStops: Colormap = [
-      [0.0, "#38bdf800"],
-      [0.1, "#7dd3fc"],
-      [0.5, "#38bdf8"],
-      [1.0, "#2563eb"],
-      [2.0, "#7c3aed"],
-      [4.0, "#c026d3"],
-      [8.0, "#f0abfc"],
-    ];
     layers.push(
       customLayer(
         "rain",
@@ -191,13 +167,17 @@ async function main() {
           id: "vane-precipitation",
           dataset: ds,
           variable: "precipitation",
-          colormap: rainStops,
-          clim: [0, 8],
+          colormap: PRECIPITATION_STOPS,
+          clim: PRECIPITATION_CLIM,
           opacity: 0.9,
         }),
       ),
     );
-    legend ??= { colormap: rainStops, clim: [0, 8], unit: " mm/h" };
+    legend ??= {
+      colormap: PRECIPITATION_STOPS,
+      clim: PRECIPITATION_CLIM,
+      unit: " mm/h",
+    };
   }
   if (meta.variables["cloud_cover"]) {
     layers.push(
@@ -213,18 +193,6 @@ async function main() {
     );
   }
   if (meta.variables["wind_gust"]) {
-    // Calm air stays transparent (the basemap shows through); color only
-    // fades in from ~a stiff breeze and runs to storm magenta.
-    const gustStops: Colormap = [
-      [0, "#38bdf800"],
-      [8, "#38bdf84d"],
-      [12, "#22d3ee"],
-      [17, "#4ade80"],
-      [22, "#facc15"],
-      [27, "#fb923c"],
-      [32, "#ef4444"],
-      [40, "#c026d3"],
-    ];
     layers.push(
       customLayer(
         "gusts",
@@ -233,8 +201,8 @@ async function main() {
           id: "vane-gusts",
           dataset: ds,
           variable: "wind_gust",
-          colormap: gustStops,
-          clim: [0, 40],
+          colormap: WIND_GUST_STOPS,
+          clim: WIND_GUST_CLIM,
           opacity: 0.75,
         }),
       ),

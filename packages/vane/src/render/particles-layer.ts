@@ -137,10 +137,11 @@ export interface ParticlesLayerOptions {
   /** Vector group name (e.g. "wind") — resolves the u/v variable pair. */
   variable?: string;
   timestep?: number;
-  /** Particle count is the square of this. Default is bbox-aware: 160 for
-   *  (near-)global datasets, 96 for regional ones — the particle field
+  /** Particle count is the square of this. The default adapts: 160 for
+   *  (near-)global datasets vs 96 for regional ones (the particle field
    *  spans the dataset bbox, so a global grid needs more particles to not
-   *  look empty while a national one needs fewer to not look scratched. */
+   *  look empty while a national one needs fewer to not look scratched),
+   *  reduced ~30% on coarse-pointer (touch) devices to keep phones smooth. */
   resolution?: number;
   /** Wind seconds simulated per real second (default 900: 15 min/s). */
   timeScale?: number;
@@ -197,7 +198,12 @@ export class ParticlesLayer implements CustomLayerInterface {
     this.group = options.variable ?? "wind";
     this.timestep = options.timestep ?? 0;
     const bbox = options.dataset.meta.bbox;
-    this.res = options.resolution ?? (bbox[2] - bbox[0] >= 350 ? 160 : 96);
+    const global = bbox[2] - bbox[0] >= 350;
+    const coarse =
+      typeof matchMedia !== "undefined" &&
+      matchMedia("(pointer: coarse)").matches;
+    this.res =
+      options.resolution ?? (global ? (coarse ? 112 : 160) : coarse ? 72 : 96);
     this.timeScale = options.timeScale ?? 900;
     this.speedRange = options.speedRange ?? [0, 20];
     this.colormap = options.colormap ?? DEFAULT_PARTICLE_COLORMAP;
