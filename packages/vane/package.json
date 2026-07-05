@@ -1,15 +1,46 @@
 {
-  "name": "vane",
-  "version": "0.0.1",
+  "name": "@rijwind/vane",
+  "version": "0.1.0",
   "description": "Read and render .vane weather datasets in the browser (Zarr v3 + MapLibre)",
   "type": "module",
   "license": "Apache-2.0",
-  "private": true,
-  "main": "./src/index.ts",
+  "homepage": "https://github.com/Rijwind/vane",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rijwind/vane.git",
+    "directory": "packages/vane"
+  },
+  "bugs": "https://github.com/Rijwind/vane/issues",
+  "keywords": [
+    "weather",
+    "maplibre",
+    "zarr",
+    "webgl",
+    "gis",
+    "meteorology",
+    "vane"
+  ],
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run typecheck && npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

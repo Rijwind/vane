@@ -8,8 +8,8 @@
     "examples/demo": {
       "name": "vane-demo",
       "dependencies": {
+        "@rijwind/vane": "workspace:*",
         "maplibre-gl": "^5.6.0",
-        "vane": "workspace:*",
       },
       "devDependencies": {
         "typescript": "^5.6.0",
@@ -17,8 +17,8 @@
       },
     },
     "packages/vane": {
-      "name": "vane",
-      "version": "0.0.1",
+      "name": "@rijwind/vane",
+      "version": "0.1.0",
       "dependencies": {
         "zarrita": "^0.7.3",
       },
@@ -107,6 +107,8 @@
     "@maplibre/mlt": ["@maplibre/mlt@1.1.12", "", { "dependencies": { "@mapbox/point-geometry": "^1.1.0" } }, "sha512-ZeK5w2TTeHOajcLaEQs1KZXw2V9wIKo1PmThlxlsHoXsQsYlBqLJzPOd6tJHRtGTChUY3DPPmjXRArYVvAbmZw=="],
 
     "@maplibre/vt-pbf": ["@maplibre/vt-pbf@4.3.2", "", { "dependencies": { "@mapbox/point-geometry": "^1.1.0", "@types/geojson": "^7946.0.16", "pbf": "^5.1.0" } }, "sha512-j6p0AdjvAR19Z3XaCysle7A4ZSo08tYOzxD0Y9NQylwPAkwJJeYub5b2eVucdeDh7erhv69DahoLOevDRERRUw=="],
+
+    "@rijwind/vane": ["@rijwind/vane@workspace:packages/vane"],
 
     "@rollup/rollup-android-arm-eabi": ["@rollup/rollup-android-arm-eabi@4.62.2", "", { "os": "android", "cpu": "arm" }, "sha512-6o7ZLZK+BeenkZCFNDXqpbjw9bD6nuWonvS/lwQJp7NoVVxm6p3qE7qQ5jGuBjiFsgvqjD8mZAU5oWxTmbOeOg=="],
 
@@ -289,8 +291,6 @@
     "undici-types": ["undici-types@8.3.0", "", {}, "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ=="],
 
     "unzipit": ["unzipit@2.0.0", "", {}, "sha512-DVeVIWUZCAQPNzm5sB0hpsG1GygTTdBnzNtYYEpInkttx5evkyqRgZi6rTczoySqp8hO5jHVKzrH0f23X8FZLg=="],
-
-    "vane": ["vane@workspace:packages/vane"],
 
     "vane-demo": ["vane-demo@workspace:examples/demo"],
 

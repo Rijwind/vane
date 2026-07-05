@@ -9,7 +9,7 @@ import {
   VaneDataset,
   buildLut,
   type Colormap,
-} from "vane";
+} from "@rijwind/vane";
 
 import { renderCharts, type ChartSeries } from "./charts.js";
 
