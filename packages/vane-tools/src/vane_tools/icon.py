@@ -143,23 +143,31 @@ def icon_files_to_variables(
     grib_dir: Path, run: datetime, *, max_hours: int = 48
 ) -> tuple[list[VaneVariable], list[datetime], tuple[float, float, float, float]]:
     """Read downloaded ICON-EU files into Vane variables (hours 0..max_hours)."""
+    # The full-domain stacks are big (~180 MB float32 per variable, 7
+    # variables); fill preallocated arrays and transform in place so the
+    # peak stays ~1.5 GB instead of ~3 GB.
     hours = list(range(max_hours + 1))
     stacks: dict[str, np.ndarray] = {}
     grid: dict = {}
     for key, dwd_var in _VARIABLES.items():
-        fields = []
-        for hour in hours:
+        stack: np.ndarray | None = None
+        for index, hour in enumerate(hours):
             values, g = _read_field(grib_dir / file_name(run, dwd_var, hour))
             grid = grid or g
-            fields.append(values.astype(np.float32))
-        stacks[key] = np.stack(fields)
+            if stack is None:
+                stack = np.empty((len(hours), *values.shape), dtype=np.float32)
+            stack[index] = values
+        stacks[key] = stack  # type: ignore[assignment]
 
-    temp = stacks["t2m"] - 273.15
-    pressure = stacks["pressure_msl"] / 100.0  # Pa -> hPa
+    temp = stacks.pop("t2m")
+    temp -= 273.15
+    pressure = stacks.pop("pressure_msl")
+    pressure /= 100.0  # Pa -> hPa
     # Accumulated since run start -> mm/h per step (steps are hourly).
-    accum = stacks["precip_accum"]
+    accum = stacks.pop("precip_accum")
     precip = np.diff(accum, axis=0, prepend=accum[:1])
-    precip = np.clip(precip, 0.0, None)
+    del accum
+    np.clip(precip, 0.0, None, out=precip)
 
     timesteps = [run + timedelta(hours=h) for h in hours]
     bbox = (grid["west"], grid["south"], grid["east"], grid["north"])
@@ -170,11 +178,11 @@ def icon_files_to_variables(
             extra_attrs={"default_colormap": "thermal", "default_clim": [-10, 35]},
         ),
         VaneVariable(
-            "wind_u", stacks["u10"], unit="m/s", scale=0.01,
+            "wind_u", stacks.pop("u10"), unit="m/s", scale=0.01,
             extra_attrs={"vector_group": "wind", "vector_component": "u"},
         ),
         VaneVariable(
-            "wind_v", stacks["v10"], unit="m/s", scale=0.01,
+            "wind_v", stacks.pop("v10"), unit="m/s", scale=0.01,
             extra_attrs={"vector_group": "wind", "vector_component": "v"},
         ),
         VaneVariable(
@@ -182,7 +190,7 @@ def icon_files_to_variables(
             extra_attrs={"default_colormap": "blues", "default_clim": [0, 10]},
         ),
         VaneVariable(
-            "wind_gust", stacks["gust"], unit="m/s", scale=0.01,
+            "wind_gust", stacks.pop("gust"), unit="m/s", scale=0.01,
             extra_attrs={"default_colormap": "viridis", "default_clim": [0, 30]},
         ),
         VaneVariable(
@@ -191,7 +199,7 @@ def icon_files_to_variables(
                          "contour_interval": 4},
         ),
         VaneVariable(
-            "cloud_cover", stacks["cloud_total"], unit="%", scale=0.01,
+            "cloud_cover", stacks.pop("cloud_total"), unit="%", scale=0.01,
             extra_attrs={"default_colormap": "clouds", "default_clim": [0, 100]},
         ),
     ]

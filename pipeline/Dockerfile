@@ -20,4 +20,11 @@ RUN mkdir -p /scratch
 # stdout is a pipe under Docker; without this, log lines arrive minutes late
 ENV PYTHONUNBUFFERED=1
 
+# Liveness: the daemon touches /tmp/vane-heartbeat every 60s from the
+# scheduler, so a dead process OR a wedged scheduler goes unhealthy.
+# -mmin -10 leaves slack for the serial boot ticks (the first ICON
+# download+convert blocks the loop for a few minutes).
+HEALTHCHECK --interval=60s --timeout=10s --start-period=300s --retries=3 \
+  CMD sh -c 'test -n "$(find /tmp/vane-heartbeat -mmin -10)"'
+
 CMD ["uv", "run", "--directory", "pipeline", "vane-pipeline", "daemon"]
