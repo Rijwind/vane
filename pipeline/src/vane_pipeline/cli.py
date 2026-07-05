@@ -16,7 +16,7 @@ import os
 
 import click
 
-from vane_pipeline.jobs import run_harmonie, run_radar
+from vane_pipeline.jobs import run_harmonie, run_icon_eu, run_radar
 from vane_pipeline.storage import storage_from_env
 
 
@@ -49,14 +49,25 @@ def radar(keep_days: int) -> None:
     run_radar(storage_from_env(), api_key=_api_key(), keep_days=keep_days)
 
 
+@main.command("icon-eu")
+@click.option("--max-hours", default=48, show_default=True)
+@click.option("--keep-days", default=7, show_default=True)
+def icon_eu(max_hours: int, keep_days: int) -> None:
+    """Publish the latest DWD ICON-EU run (no-op if already current)."""
+    run_icon_eu(storage_from_env(), max_hours=max_hours, keep_days=keep_days)
+
+
 @main.command()
 @click.option("--harmonie-minutes", default=10, show_default=True,
               help="How often to check for a new Harmonie run")
 @click.option("--radar-minutes", default=3, show_default=True,
               help="How often to check for a new radar nowcast")
+@click.option("--icon-minutes", default=20, show_default=True,
+              help="How often to check for a new ICON-EU run")
 @click.option("--max-hours", default=48, show_default=True)
 @click.option("--keep-days", default=7, show_default=True)
-def daemon(harmonie_minutes: int, radar_minutes: int, max_hours: int, keep_days: int) -> None:
+def daemon(harmonie_minutes: int, radar_minutes: int, icon_minutes: int,
+           max_hours: int, keep_days: int) -> None:
     """Run forever: poll for new runs and publish them.
 
     Polling is cheap (one list call + pointer read when nothing changed),
@@ -80,12 +91,19 @@ def daemon(harmonie_minutes: int, radar_minutes: int, max_hours: int, keep_days:
     def radar_tick() -> None:
         guarded("radar", lambda: run_radar(storage, api_key=api_key, keep_days=keep_days))
 
+    def icon_tick() -> None:
+        guarded("icon-eu", lambda: run_icon_eu(
+            storage, max_hours=max_hours, keep_days=keep_days))
+
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(harmonie_tick, "interval", minutes=harmonie_minutes, next_run_time=None)
     scheduler.add_job(radar_tick, "interval", minutes=radar_minutes, next_run_time=None)
-    print(f"vane-pipeline daemon: harmonie every {harmonie_minutes}m, radar every {radar_minutes}m")
+    scheduler.add_job(icon_tick, "interval", minutes=icon_minutes, next_run_time=None)
+    print(f"vane-pipeline daemon: harmonie every {harmonie_minutes}m, "
+          f"radar every {radar_minutes}m, icon-eu every {icon_minutes}m")
     harmonie_tick()
     radar_tick()
+    icon_tick()
     scheduler.start()
 
 

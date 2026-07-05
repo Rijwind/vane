@@ -7,6 +7,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from vane_tools.icon import build_icon_eu_vane, latest_complete_run
 from vane_tools.knmi import (
     RADAR_DATASET,
     RADAR_VERSION,
@@ -22,6 +23,7 @@ from vane_pipeline.storage import Storage
 
 HARMONIE_SLUG = "knmi_harmonie_nl"
 RADAR_SLUG = "knmi_radar_nl"
+ICON_EU_SLUG = "dwd_icon_eu"
 
 
 def run_harmonie(
@@ -49,6 +51,34 @@ def run_harmonie(
             storage, HARMONIE_SLUG, vane_path, run_time=run_time, keep_days=keep_days
         )
         print(f"harmonie: published {name}")
+        return name
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def run_icon_eu(
+    storage: Storage,
+    *,
+    max_hours: int = 48,
+    keep_days: int = 7,
+) -> str | None:
+    """Publish the latest complete ICON-EU run if it isn't published yet.
+    No API key — DWD open data is plain HTTPS."""
+    run_time = latest_complete_run(max_hours=max_hours)
+    if published_run(storage, ICON_EU_SLUG) == run_time:
+        print(f"icon-eu: run {run_time:%Y-%m-%dT%H:%MZ} already published")
+        return None
+
+    workdir = Path(tempfile.mkdtemp(prefix="vane-icon-"))
+    try:
+        vane_path = workdir / "out.vane"
+        build_icon_eu_vane(
+            vane_path, max_hours=max_hours, run=run_time, keep_grib=workdir / "src"
+        )
+        name = publish(
+            storage, ICON_EU_SLUG, vane_path, run_time=run_time, keep_days=keep_days
+        )
+        print(f"icon-eu: published {name}")
         return name
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

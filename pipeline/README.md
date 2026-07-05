@@ -19,8 +19,8 @@ is a cheap no-op — so the daemon simply polls every few minutes.
 | Job | Source | Cadence | Status |
 |---|---|---|---|
 | `harmonie` | KNMI Harmonie cy43 P1 (NL, 2km) | hourly runs, poll 10 min | ✅ |
-| radar | KNMI radar nowcast (NL, 1km, 5 min) | 5 min | planned |
-| icon-eu | DWD ICON-EU (Europe, 7km) | 4+4 runs/day | phase 3 |
+| `radar` | KNMI radar nowcast (NL, 1km, 5 min) | 5 min, poll 3 min | ✅ |
+| `icon-eu` | DWD ICON-EU (Europe, 7km) | 00/06/12/18Z, poll 20 min | ✅ (no API key needed) |
 | ecmwf | ECMWF IFS open data (global, 0.25°) | 4 runs/day | phase 3 |
 
 Per-source quirks (GRIB editions, grids, wind rotation, accumulation
@@ -56,9 +56,11 @@ docker run -e VANE_STORAGE=s3:… -e VANE_S3_ENDPOINT=… \
   vane-pipeline
 ```
 
-Sizing: ~1–2 GB RAM during conversion, ~2.5 GB scratch disk per Harmonie run
-(tar + extracted GRIBs), modest steady-state. One small worker VPS is
-plenty.
+Sizing: ~1–2 GB RAM during Harmonie conversion, ~2.5 GB scratch disk per
+run (tar + extracted GRIBs); the ICON-EU job peaks higher (~2.5–3 GB RAM
+for the 7 float32 full-domain stacks, ~1 GB scratch) and uploads ~300 MB
+per publication. One small worker VPS still fits, but give it ≥4 GB RAM
+with ICON enabled.
 
 The bucket/CDN in front must serve HTTP range requests and CORS:
 

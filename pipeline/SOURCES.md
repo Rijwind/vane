@@ -51,14 +51,30 @@ converter learns something new.
 - Pixel values are scaled ints with a calibration formula in the HDF5 attrs.
 - 5-minute cadence; nowcast product carries +2h of 5-min steps.
 
-## DWD ICON-EU / ICON-D2 (phase 3)
+## DWD ICON-EU (implemented — `icon.py`) / ICON-D2 (later)
 
 - **Good news:** DWD publishes the EU nest and D2 as
   `regular-lat-lon` GRIB2 files on opendata.dwd.de — the icosahedral-grid
   problem does **not** apply to these. Regular files have earth-relative
-  winds.
-- One file per (run, leadtime, variable) — many small downloads; bzip2'd.
-- Longitude 0–360 wrap applies.
+  winds. WMO-clean GRIB2: no local tables, and each file holds exactly
+  one message, so no in-file selection either.
+- One file per (run, leadtime, variable) — many small downloads (~340 for
+  a 48h run, bzip2'd; fetched with a small thread pool).
+- Longitude 0–360 wrap applies (first point 336.5° → -23.5).
+  `jScansPositively=1` → flip rows. Grid 1377×657 @ 0.0625°,
+  29.5–70.5°N / 23.5°W–62.5°E.
+- `TOT_PREC` accumulated since run start → difference to mm/h.
+  `VMAX_10M` is already a gust **magnitude** (max over the previous output
+  step) — no u/v pair like Harmonie. `CLCT` is % 0–100, `PMSL` in Pa.
+- **Run availability:** one run per cycle directory, replaced in place;
+  main cycles 00/06/12/18Z reach 120h, intermediate 03/09/15/21Z only 30h
+  (we skip those). Completeness = the *last* needed lead hour exists for
+  every variable (`latest_complete_run` HEAD-probes those). A run appears
+  ~2.5–3.5h after cycle time.
+- **Size note:** the full-domain fields are ~1.1 MB/step/variable at the
+  current int16 `scale=0.01` — a 48h publication ≈ 300 MB. If that ever
+  hurts, the knob is coarser quantization (e.g. 0.05 °C) or fewer
+  variables, not the format.
 
 ## DWD ICON global (phase 3+, only if we want it)
 

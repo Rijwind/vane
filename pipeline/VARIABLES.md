@@ -13,17 +13,17 @@ extracted (usually a ~5-line converter change) · — not available.
 
 | Variable | Unit | KNMI Harmonie P1 | KNMI radar | DWD ICON-EU | ECMWF IFS open | Notes |
 |---|---|---|---|---|---|---|
-| temperature (2m) | °C | ✅ (param 11, lvl 2) | — | ⬜ | ⬜ | GRIB gives Kelvin; converters store °C |
-| wind u/v (10m) | m/s | ✅ (33/34, lvl 10) | — | ⬜ | ⬜ | vector pair, `vector_group: wind` |
-| precipitation rate | mm/h | ✅ (61, tri=4, differenced) | ✅ (calibrated, ×12) | ⬜ | ⬜ | model = accumulation → difference per step; radar = measured, much sharper |
-| wind gusts (10m) | m/s | ⬜ (162/163, tri=2) | — | ⬜ | ⬜ | u/v gust components in P1 |
-| dew point (2m) | °C | ⬜ (17, lvl 2) | — | ⬜ | ⬜ | |
-| relative humidity (2m) | % | ⬜ (52, lvl 2) | — | ⬜ | ⬜ | |
-| pressure (MSL) | hPa | ⬜ (1, levtype 103) | — | ⬜ | ⬜ | best rendered as contours (mode planned) |
-| cloud cover total | % | ⬜ (71) | — | ⬜ | ⬜ | P1 also has high/mid/low (75/74/73) |
-| visibility | m | ⬜ (20) | — | ⬜ | — | |
-| snow depth | m | ⬜ (66) | — | ⬜ | ⬜ | |
-| global radiation | W/m² | ⬜ (117, tri=4) | — | ⬜ | ⬜ | accumulated → difference, like precip |
+| temperature (2m) | °C | ✅ (param 11, lvl 2) | — | ✅ (T_2M) | ⬜ | GRIB gives Kelvin; converters store °C |
+| wind u/v (10m) | m/s | ✅ (33/34, lvl 10) | — | ✅ (U_10M/V_10M) | ⬜ | vector pair, `vector_group: wind` |
+| precipitation rate | mm/h | ✅ (61, tri=4, differenced) | ✅ (calibrated, ×12) | ✅ (TOT_PREC, differenced) | ⬜ | model = accumulation → difference per step; radar = measured, much sharper |
+| wind gusts (10m) | m/s | ✅ (162/163, tri=2 → magnitude) | — | ✅ (VMAX_10M, already magnitude) | ⬜ | stored as scalar `wind_gust` (hourly max); direction adds little over mean wind, halves bytes |
+| dew point (2m) | °C | ⬜ (17, lvl 2) | — | ⬜ (TD_2M) | ⬜ | |
+| relative humidity (2m) | % | ⬜ (52, lvl 2) | — | ⬜ (RELHUM_2M) | ⬜ | Harmonie source is fraction 0–1 → ×100 |
+| pressure (MSL) | hPa | ✅ (1, levtype "103", Pa → /100) | — | ✅ (PMSL, Pa → /100) | ⬜ | `default_mode: contours`, `contour_interval: 4` |
+| cloud cover total | % | ✅ (71, fraction → ×100) | — | ✅ (CLCT, already %) | ⬜ | P1 also has high/mid/low (75/74/73) |
+| visibility | m | ⬜ (20) | — | ⬜ (VIS) | — | |
+| snow depth | m | ⬜ (66) | — | ⬜ (H_SNOW) | ⬜ | |
+| global radiation | W/m² | ⬜ (117, tri=4) | — | ⬜ (ASWDIR_S + ASWDIFD_S) | ⬜ | accumulated → difference, like precip |
 | wind at 50/100/200/300m | m/s | ⬜ (33/34 at levels) | — | — | — | the wind-turbine niche set; needs the `level` dimension (structurally supported, not implemented in the writer yet) |
 
 ## Not in these sources (needs a different provider)

@@ -1,4 +1,4 @@
-"""`vane` CLI: pack / unpack / info / synth / knmi."""
+"""`vane` CLI: pack / unpack / info / synth / knmi / radar / icon-eu."""
 
 from __future__ import annotations
 
@@ -99,6 +99,20 @@ def radar(out_path: str, api_key: str) -> None:
     from vane_tools.knmi import build_radar_vane
 
     build_radar_vane(out_path, api_key=api_key)
+
+
+@main.command("icon-eu")
+@click.argument("out_path", type=click.Path(dir_okay=False))
+@click.option("--max-hours", default=48, show_default=True,
+              help="Forecast hours to include")
+@click.option("--keep-grib", type=click.Path(file_okay=False), default=None,
+              help="Directory to keep the downloaded GRIBs (skips re-download)")
+def icon_eu(out_path: str, max_hours: int, keep_grib: str | None) -> None:
+    """Download the latest DWD ICON-EU run and convert it to .vane (no key needed)."""
+    from vane_tools.icon import build_icon_eu_vane
+
+    build_icon_eu_vane(out_path, max_hours=max_hours,
+                       keep_grib=Path(keep_grib) if keep_grib else None)
 
 
 if __name__ == "__main__":
