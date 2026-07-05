@@ -41,3 +41,7 @@ read via HTTP range requests, rendered with MapLibre/WebGL2. Start with
   — regenerate fixture + expectations together).
 - This is a vendor-neutral open-source project: no downstream product
   specifics (hosting, billing, company infra) in this repo.
+- **Everything public-facing is in English** — commit messages, code
+  comments, docs, issues. The repo is public with an international
+  audience (MapLibre/Zarr/Pangeo communities); Dutch is for the private
+  rijwind planning docs only.
