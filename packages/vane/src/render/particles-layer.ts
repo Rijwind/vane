@@ -121,18 +121,32 @@ void main() {
   fragColor = texture(u_texture, v_uv) * u_alpha;
 }`;
 
+/** Default particle ramp: silver to white, speed shows as brightness.
+ *  Chosen for visibility — dark scientific ramps (viridis etc.) disappear
+ *  at low speeds on dark basemaps. NB: colormap stops for this layer span
+ *  the normalized [0,1] speed domain (see `speedRange`), not m/s. */
+const DEFAULT_PARTICLE_COLORMAP: Colormap = [
+  [0, "#cbd5e1b3"],
+  [0.6, "#f8fafcd9"],
+  [1, "#ffffffff"],
+];
+
 export interface ParticlesLayerOptions {
   id: string;
   dataset: VaneDataset;
   /** Vector group name (e.g. "wind") — resolves the u/v variable pair. */
   variable?: string;
   timestep?: number;
-  /** Particle count is the square of this (default 128 -> 16384). */
+  /** Particle count is the square of this. Default is bbox-aware: 160 for
+   *  (near-)global datasets, 96 for regional ones — the particle field
+   *  spans the dataset bbox, so a global grid needs more particles to not
+   *  look empty while a national one needs fewer to not look scratched. */
   resolution?: number;
   /** Wind seconds simulated per real second (default 900: 15 min/s). */
   timeScale?: number;
   /** Speed range (m/s) mapped over the colormap. */
   speedRange?: [number, number];
+  /** Stops span the normalized [0,1] speed domain, not m/s. */
   colormap?: Colormap;
   opacity?: number;
   /** Per-frame trail retention (0..1, default 0.96). */
@@ -182,10 +196,11 @@ export class ParticlesLayer implements CustomLayerInterface {
     this.dataset = options.dataset;
     this.group = options.variable ?? "wind";
     this.timestep = options.timestep ?? 0;
-    this.res = options.resolution ?? 128;
+    const bbox = options.dataset.meta.bbox;
+    this.res = options.resolution ?? (bbox[2] - bbox[0] >= 350 ? 160 : 96);
     this.timeScale = options.timeScale ?? 900;
     this.speedRange = options.speedRange ?? [0, 20];
-    this.colormap = options.colormap ?? "viridis";
+    this.colormap = options.colormap ?? DEFAULT_PARTICLE_COLORMAP;
     this.opacity = options.opacity ?? 0.9;
     this.fade = options.fade ?? 0.96;
     this.particleSize = options.particleSize ?? 1.6;

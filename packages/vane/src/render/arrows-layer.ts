@@ -92,6 +92,16 @@ const GLYPH = new Float32Array([
   -HEAD_HALF_WIDTH, HEAD_BASE,  HEAD_HALF_WIDTH, HEAD_BASE,  0.0, 0.5,
 ]);
 
+/** Default arrow ramp: silver for light air through yellow to red at the
+ *  top of `speedRange`. Chosen for visibility — dark scientific ramps
+ *  (viridis etc.) disappear at low speeds on dark basemaps. NB: colormap
+ *  stops for this layer span the normalized [0,1] speed domain. */
+const DEFAULT_ARROW_COLORMAP: Colormap = [
+  [0, "#e2e8f0cc"],
+  [0.5, "#fde047"],
+  [1, "#f87171"],
+];
+
 export interface ArrowsLayerOptions {
   id: string;
   dataset: VaneDataset;
@@ -104,6 +114,7 @@ export interface ArrowsLayerOptions {
   size?: number;
   /** Speed range (m/s) mapped over the colormap. */
   speedRange?: [number, number];
+  /** Stops span the normalized [0,1] speed domain, not m/s. */
   colormap?: Colormap;
   opacity?: number;
   /** Hide arrows below this speed, m/s (default 0.4: calm looks like noise). */
@@ -146,7 +157,7 @@ export class ArrowsLayer implements CustomLayerInterface {
     this.spacing = options.spacing ?? 56;
     this.size = options.size ?? 28;
     this.speedRange = options.speedRange ?? [0, 20];
-    this.colormap = options.colormap ?? "viridis";
+    this.colormap = options.colormap ?? DEFAULT_ARROW_COLORMAP;
     this.opacity = options.opacity ?? 0.9;
     this.minSpeed = options.minSpeed ?? 0.4;
   }

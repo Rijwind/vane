@@ -92,6 +92,21 @@ async function main() {
   document.getElementById("attrib")!.innerHTML =
     `${attribution} · basemap © <a href="https://carto.com/">CARTO</a> / OSM`;
 
+  // Fitting a (near-)global bbox puts the whole world in a few hundred
+  // pixels: particles become speckle noise and custom layers don't repeat
+  // onto MapLibre's wrapped world copies. Start global datasets on a
+  // continent-level camera instead; users can still zoom out.
+  const isGlobalBbox = east - west >= 350;
+  const camera: maplibregl.MapOptions = isGlobalBbox
+    ? { center: [10, 45], zoom: 2.2 } as maplibregl.MapOptions
+    : {
+        bounds: [
+          [west, south],
+          [east, north],
+        ],
+        fitBoundsOptions: { padding: 40 },
+      } as maplibregl.MapOptions;
+
   const map = new maplibregl.Map({
     container: "map",
     style: {
@@ -109,11 +124,10 @@ async function main() {
       },
       layers: [{ id: "carto", type: "raster", source: "carto" }],
     },
-    bounds: [
-      [west, south],
-      [east, north],
-    ],
-    fitBoundsOptions: { padding: 40 },
+    ...camera,
+    // Phones report DPR 3; a 3x canvas plus the particle simulation makes
+    // the demo lag there. 2x is visually indistinguishable.
+    pixelRatio: Math.min(globalThis.devicePixelRatio ?? 1, 2),
   });
   map.on("error", (e) => console.error("map error:", e.error ?? e));
 
@@ -122,7 +136,25 @@ async function main() {
   let legend: { colormap: Colormap; clim: [number, number]; unit: string } | null = null;
 
   if (meta.variables["temperature"]) {
-    const clim = ds.variableMeta("temperature").default_clim ?? [0, 30];
+    // Full meteorological hue ramp instead of the muted "thermal" hint, on
+    // a fixed clim: a few degrees of difference should read on the map, and
+    // the same temperature should be the same color in every dataset.
+    const tempStops: Colormap = [
+      [-30, "#7c3aed"],
+      [-20, "#6366f1"],
+      [-10, "#3b82f6"],
+      [-5, "#0ea5e9"],
+      [0, "#22d3ee"],
+      [5, "#2dd4bf"],
+      [10, "#4ade80"],
+      [15, "#a3e635"],
+      [20, "#facc15"],
+      [25, "#fb923c"],
+      [30, "#ef4444"],
+      [35, "#b91c1c"],
+      [45, "#7f1d1d"],
+    ];
+    const tempClim: [number, number] = [-30, 45];
     layers.push(
       customLayer(
         "temperature",
@@ -131,11 +163,13 @@ async function main() {
           id: "vane-temperature",
           dataset: ds,
           variable: "temperature",
-          opacity: 0.65,
+          colormap: tempStops,
+          clim: tempClim,
+          opacity: 0.7,
         }),
       ),
     );
-    legend = { colormap: "thermal", clim, unit: "°C" };
+    legend = { colormap: tempStops, clim: tempClim, unit: "°C" };
   }
   if (meta.variables["precipitation"]) {
     // Punchier than the dataset hint: drizzle (0.1–1 mm/h) must be visible,
@@ -158,6 +192,7 @@ async function main() {
           dataset: ds,
           variable: "precipitation",
           colormap: rainStops,
+          clim: [0, 8],
           opacity: 0.9,
         }),
       ),
@@ -178,6 +213,18 @@ async function main() {
     );
   }
   if (meta.variables["wind_gust"]) {
+    // Calm air stays transparent (the basemap shows through); color only
+    // fades in from ~a stiff breeze and runs to storm magenta.
+    const gustStops: Colormap = [
+      [0, "#38bdf800"],
+      [8, "#38bdf84d"],
+      [12, "#22d3ee"],
+      [17, "#4ade80"],
+      [22, "#facc15"],
+      [27, "#fb923c"],
+      [32, "#ef4444"],
+      [40, "#c026d3"],
+    ];
     layers.push(
       customLayer(
         "gusts",
@@ -186,7 +233,9 @@ async function main() {
           id: "vane-gusts",
           dataset: ds,
           variable: "wind_gust",
-          opacity: 0.65,
+          colormap: gustStops,
+          clim: [0, 40],
+          opacity: 0.75,
         }),
       ),
     );
