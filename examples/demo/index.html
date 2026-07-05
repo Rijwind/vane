@@ -23,7 +23,7 @@
         border-radius: 6px; width: 28px; height: 24px; cursor: pointer;
       }
       #timestamp { font-variant-numeric: tabular-nums; color: #b7c2cc; font-size: 12px; }
-      .toggles { display: flex; gap: 12px; margin-top: 8px; }
+      .toggles { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
       .toggles label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
       #legend { margin-top: 10px; }
       #legend-bar { height: 8px; border-radius: 4px; margin-bottom: 3px; }
@@ -71,11 +71,7 @@
         <input id="slider" type="range" min="0" max="0" value="0" step="1" />
       </div>
       <div id="timestamp"></div>
-      <div class="toggles">
-        <label><input type="checkbox" id="toggle-temp" checked /> temperature</label>
-        <label><input type="checkbox" id="toggle-precip" checked /> rain</label>
-        <label><input type="checkbox" id="toggle-wind" checked /> wind</label>
-      </div>
+      <div class="toggles" id="toggles"></div>
       <div id="legend">
         <div id="legend-bar"></div>
         <div id="legend-labels"><span id="legend-min"></span><span id="legend-max"></span></div>

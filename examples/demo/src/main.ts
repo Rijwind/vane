@@ -1,8 +1,11 @@
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
+  ArrowsLayer,
   ColormapLayer,
+  ContoursLayer,
   ParticlesLayer,
+  ValuesLayer,
   VaneDataset,
   buildLut,
   type Colormap,
@@ -22,10 +25,49 @@ function show(id: string, text: string) {
   document.getElementById(id)!.textContent = text;
 }
 
+/** Uniform handle over both kinds of layers: WebGL custom layers
+ * (map.addLayer) and style-layer controllers (layer.addTo). */
 interface DemoLayer {
-  toggleId: string;
   label: string;
-  layer: ColormapLayer | ParticlesLayer;
+  defaultOn: boolean;
+  add: (map: maplibregl.Map) => void;
+  setVisible: (map: maplibregl.Map, visible: boolean) => void;
+  setTimestep: (t: number) => void;
+}
+
+function customLayer(
+  label: string,
+  defaultOn: boolean,
+  layer: ColormapLayer | ParticlesLayer | ArrowsLayer,
+): DemoLayer {
+  return {
+    label,
+    defaultOn,
+    add: (map) => {
+      map.addLayer(layer);
+      if (!defaultOn) map.setLayoutProperty(layer.id, "visibility", "none");
+    },
+    setVisible: (map, visible) =>
+      map.setLayoutProperty(layer.id, "visibility", visible ? "visible" : "none"),
+    setTimestep: (t) => layer.setTimestep(t),
+  };
+}
+
+function controllerLayer(
+  label: string,
+  defaultOn: boolean,
+  layer: ValuesLayer | ContoursLayer,
+): DemoLayer {
+  return {
+    label,
+    defaultOn,
+    add: (map) => {
+      layer.addTo(map);
+      if (!defaultOn) layer.setVisible(false);
+    },
+    setVisible: (_map, visible) => layer.setVisible(visible),
+    setTimestep: (t) => layer.setTimestep(t),
+  };
 }
 
 async function main() {
@@ -42,7 +84,9 @@ async function main() {
   );
   document.getElementById("attrib")!.innerHTML = meta.source.startsWith("knmi")
     ? 'data: © <a href="https://dataplatform.knmi.nl/">KNMI</a>, CC-BY-4.0 · basemap © <a href="https://carto.com/">CARTO</a> / OSM'
-    : 'synthetic demo data · basemap © <a href="https://carto.com/">CARTO</a> / OSM';
+    : meta.source.startsWith("dwd")
+      ? 'data: © <a href="https://www.dwd.de/">DWD</a>, CC-BY-4.0 · basemap © <a href="https://carto.com/">CARTO</a> / OSM'
+      : 'synthetic demo data · basemap © <a href="https://carto.com/">CARTO</a> / OSM';
 
   const map = new maplibregl.Map({
     container: "map",
@@ -75,16 +119,18 @@ async function main() {
 
   if (meta.variables["temperature"]) {
     const clim = ds.variableMeta("temperature").default_clim ?? [0, 30];
-    layers.push({
-      toggleId: "toggle-temp",
-      label: "temperature",
-      layer: new ColormapLayer({
-        id: "vane-temperature",
-        dataset: ds,
-        variable: "temperature",
-        opacity: 0.65,
-      }),
-    });
+    layers.push(
+      customLayer(
+        "temperature",
+        true,
+        new ColormapLayer({
+          id: "vane-temperature",
+          dataset: ds,
+          variable: "temperature",
+          opacity: 0.65,
+        }),
+      ),
+    );
     legend = { colormap: "thermal", clim, unit: "°C" };
   }
   if (meta.variables["precipitation"]) {
@@ -99,50 +145,118 @@ async function main() {
       [4.0, "#c026d3"],
       [8.0, "#f0abfc"],
     ];
-    layers.push({
-      toggleId: "toggle-precip",
-      label: "rain",
-      layer: new ColormapLayer({
-        id: "vane-precipitation",
-        dataset: ds,
-        variable: "precipitation",
-        colormap: rainStops,
-        opacity: 0.9,
-      }),
-    });
+    layers.push(
+      customLayer(
+        "rain",
+        true,
+        new ColormapLayer({
+          id: "vane-precipitation",
+          dataset: ds,
+          variable: "precipitation",
+          colormap: rainStops,
+          opacity: 0.9,
+        }),
+      ),
+    );
     legend ??= { colormap: rainStops, clim: [0, 8], unit: " mm/h" };
+  }
+  if (meta.variables["cloud_cover"]) {
+    layers.push(
+      customLayer(
+        "clouds",
+        false,
+        new ColormapLayer({
+          id: "vane-clouds",
+          dataset: ds,
+          variable: "cloud_cover",
+        }),
+      ),
+    );
+  }
+  if (meta.variables["wind_gust"]) {
+    layers.push(
+      customLayer(
+        "gusts",
+        false,
+        new ColormapLayer({
+          id: "vane-gusts",
+          dataset: ds,
+          variable: "wind_gust",
+          opacity: 0.65,
+        }),
+      ),
+    );
   }
   const hasWind = Object.values(meta.variables).some((v) => v.vector_group === "wind");
   if (hasWind) {
-    layers.push({
-      toggleId: "toggle-wind",
-      label: "wind",
-      layer: new ParticlesLayer({
-        id: "vane-wind",
-        dataset: ds,
-        variable: "wind",
-        speedRange: [0, 18],
-        opacity: 0.9,
-      }),
-    });
+    layers.push(
+      customLayer(
+        "wind",
+        true,
+        new ParticlesLayer({
+          id: "vane-wind",
+          dataset: ds,
+          variable: "wind",
+          speedRange: [0, 18],
+          opacity: 0.9,
+        }),
+      ),
+    );
+    layers.push(
+      customLayer(
+        "arrows",
+        false,
+        new ArrowsLayer({
+          id: "vane-arrows",
+          dataset: ds,
+          variable: "wind",
+          speedRange: [0, 18],
+        }),
+      ),
+    );
+  }
+  if (meta.variables["pressure_msl"]) {
+    layers.push(
+      controllerLayer(
+        "pressure",
+        false,
+        new ContoursLayer({
+          id: "vane-pressure",
+          dataset: ds,
+          variable: "pressure_msl",
+          color: "rgba(255,255,255,0.75)",
+        }),
+      ),
+    );
+  }
+  if (meta.variables["temperature"]) {
+    layers.push(
+      controllerLayer(
+        "values",
+        false,
+        new ValuesLayer({
+          id: "vane-values",
+          dataset: ds,
+          variable: "temperature",
+        }),
+      ),
+    );
   }
 
   map.on("load", () => {
-    for (const { layer } of layers) map.addLayer(layer);
+    for (const layer of layers) layer.add(map);
   });
 
-  // Toggles: only show the ones that apply to this dataset.
-  const active = new Set(layers.map((l) => l.toggleId));
-  for (const input of document.querySelectorAll<HTMLInputElement>(".toggles input")) {
-    const label = input.parentElement as HTMLElement;
-    if (!active.has(input.id)) {
-      label.style.display = "none";
-      continue;
-    }
-    const entry = layers.find((l) => l.toggleId === input.id)!;
-    input.addEventListener("change", () => {
-      map.setLayoutProperty(entry.layer.id, "visibility", input.checked ? "visible" : "none");
-    });
+  // One checkbox per layer this dataset supports.
+  const togglesEl = document.getElementById("toggles")!;
+  for (const layer of layers) {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = layer.defaultOn;
+    label.append(input, ` ${layer.label}`);
+    togglesEl.append(label);
+    input.addEventListener("change", () => layer.setVisible(map, input.checked));
   }
 
   // Legend for the primary colormap layer.
@@ -240,7 +354,7 @@ async function main() {
   const setTimestep = (t: number) => {
     slider.value = String(t);
     show("timestamp", new Date(meta.timesteps[t]!).toUTCString());
-    for (const { layer } of layers) layer.setTimestep(t);
+    for (const layer of layers) layer.setTimestep(t);
     drawCharts();
   };
   slider.addEventListener("input", () => setTimestep(Number(slider.value)));
