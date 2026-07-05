@@ -10,8 +10,14 @@ on (indicatorOfParameter, levelType, level, timeRangeIndicator):
     (33, "sfc",  10, 0)  wind u 10m [m/s]
     (34, "sfc",  10, 0)  wind v 10m [m/s]
     (61, "sfc",   0, 4)  total precipitation, accumulated since run [kg/m²]
+    (162, "sfc", 10, 2)  wind gust u 10m [m/s] (max over previous hour)
+    (163, "sfc", 10, 2)  wind gust v 10m [m/s]
+    (1, "103",    0, 0)  pressure MSL [Pa]
+    (71, "sfc",   0, 0)  total cloud cover [0..1]
 
-Precipitation is differenced between consecutive lead hours to mm/h.
+Precipitation is differenced between consecutive lead hours to mm/h. Gust
+u/v are collapsed to a scalar magnitude (`wind_gust`) — direction adds
+little over the mean wind and it halves the bytes.
 """
 
 from __future__ import annotations
@@ -31,6 +37,10 @@ _SELECT = {
     ("u10", 33, "sfc", 10, 0),
     ("v10", 34, "sfc", 10, 0),
     ("precip_accum", 61, "sfc", 0, 4),
+    ("gust_u", 162, "sfc", 10, 2),
+    ("gust_v", 163, "sfc", 10, 2),
+    ("pressure_msl", 1, "103", 0, 0),
+    ("cloud_total", 71, "sfc", 0, 0),
 }
 
 
@@ -100,7 +110,7 @@ def harmonie_tar_to_variables(
         raise ValueError("cannot parse run timestamp from GRIB filename")
     run_time = datetime.strptime(run_match.group(1), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
 
-    temps, us, vs, accums = [], [], [], []
+    temps, us, vs, accums, gusts, pressures, clouds = [], [], [], [], [], [], []
     grid: dict = {}
     for hour in hours:
         fields, g = _read_fields(by_hour[hour])
@@ -109,11 +119,17 @@ def harmonie_tar_to_variables(
         us.append(fields["u10"])
         vs.append(fields["v10"])
         accums.append(fields["precip_accum"])
+        gusts.append(np.hypot(fields["gust_u"], fields["gust_v"]))
+        pressures.append(fields["pressure_msl"] / 100.0)  # Pa -> hPa
+        clouds.append(fields["cloud_total"] * 100.0)  # fraction -> %
 
     temp = np.stack(temps)
     wind_u = np.stack(us)
     wind_v = np.stack(vs)
     accum = np.stack(accums)
+    wind_gust = np.stack(gusts)
+    pressure = np.stack(pressures)
+    cloud = np.stack(clouds)
     # Accumulated since run start -> mm/h per step (steps are hourly).
     precip = np.diff(accum, axis=0, prepend=accum[:1])
     precip = np.clip(precip, 0.0, None)
@@ -137,6 +153,19 @@ def harmonie_tar_to_variables(
         VaneVariable(
             "precipitation", precip, unit="mm/h", scale=0.01,
             extra_attrs={"default_colormap": "blues", "default_clim": [0, 10]},
+        ),
+        VaneVariable(
+            "wind_gust", wind_gust, unit="m/s", scale=0.01,
+            extra_attrs={"default_colormap": "viridis", "default_clim": [0, 30]},
+        ),
+        VaneVariable(
+            "pressure_msl", pressure, unit="hPa", scale=0.01, offset=1000.0,
+            extra_attrs={"default_clim": [980, 1040], "default_mode": "contours",
+                         "contour_interval": 4},
+        ),
+        VaneVariable(
+            "cloud_cover", cloud, unit="%", scale=0.01,
+            extra_attrs={"default_colormap": "clouds", "default_clim": [0, 100]},
         ),
     ]
     return variables, timesteps, bbox

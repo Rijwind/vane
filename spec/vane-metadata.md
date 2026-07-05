@@ -42,6 +42,10 @@ weather renderer needs on top.
   vector field for vector render modes (particles, arrows).
 - `default_colormap` / `default_clim`: rendering *hints* — clients may
   override.
+- `default_mode`: optional hint naming the render mode the variable is
+  meant for (e.g. `"contours"` for MSL pressure — a pressure colormap is
+  rarely what anyone wants). `contour_interval` (physical units) hints the
+  isoline spacing. Hints, like the colormap fields.
 - `timesteps`: ISO-8601 UTC, one per index along the `time` dimension.
 - `levels`: `null` for surface-only, else an array (e.g. meters above
   ground) matching the `level` dimension of 4-D arrays.
