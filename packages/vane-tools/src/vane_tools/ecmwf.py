@@ -6,9 +6,13 @@ lines with the byte offset/length of every message. We fetch the small
 index, then issue one HTTP range request per wanted field — a full
 48h/7-variable ingest transfers ~50 MB instead of multi-GB files.
 
-Layout: https://data.ecmwf.int/forecasts/YYYYMMDD/HHz/ifs/0p25/<stream>/
-        YYYYMMDDHHMMSS-<step>h-<stream>-fc.grib2[.index]
-where stream = "oper" for the 00/12Z cycles and "scda" for 06/18Z.
+Layout: https://data.ecmwf.int/forecasts/YYYYMMDD/HHz/ifs/0p25/oper/
+        YYYYMMDDHHMMSS-<step>h-oper-fc.grib2[.index]
+All four cycles use the "oper" stream. (ECMWF open data historically
+split 06/18Z into a shorter "scda" stream, but that stream is no longer
+disseminated — there is no `.../0p25/scda/` directory, so every scda URL
+404s. Using "scda" for 06/18Z silently skipped those two cycles, leaving
+only 2 published runs/day. See pipeline/SOURCES.md.)
 
 Source gotchas (see pipeline/SOURCES.md):
 - Global 0.25° grid (1440×721), longitudes 0–359.75 → columns rolled so
@@ -48,16 +52,16 @@ _PARAMS = {
 }
 
 
-def _stream(run: datetime) -> str:
-    return "oper" if run.hour in (0, 12) else "scda"
+# All four cycles disseminate under the "oper" stream; the old "scda"
+# stream for 06/18Z is no longer published (see module docstring).
+_STREAM = "oper"
 
 
 def data_url(run: datetime, step: int) -> str:
-    stream = _stream(run)
     stamp = run.astimezone(timezone.utc)
     return (
-        f"{FORECASTS_BASE}/{stamp:%Y%m%d}/{stamp:%H}z/ifs/0p25/{stream}/"
-        f"{stamp:%Y%m%d%H%M%S}-{step}h-{stream}-fc.grib2"
+        f"{FORECASTS_BASE}/{stamp:%Y%m%d}/{stamp:%H}z/ifs/0p25/{_STREAM}/"
+        f"{stamp:%Y%m%d%H%M%S}-{step}h-{_STREAM}-fc.grib2"
     )
 
 

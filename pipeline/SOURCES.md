@@ -107,9 +107,17 @@ converter learns something new.
   sidecar (JSON lines with `_offset`/`_length` per message) → fetch the
   index, then one HTTP range request per wanted field: a 48h ingest
   moves ~50 MB, not multi-GB files.
-- Layout `data.ecmwf.int/forecasts/YYYYMMDD/HHz/ifs/0p25/<stream>/…`;
-  stream = `oper` for 00/12Z, `scda` for 06/18Z. Published ~7–8h after
-  cycle time, steps progressively — probe the *last* step's index.
+- Layout `data.ecmwf.int/forecasts/YYYYMMDD/HHz/ifs/0p25/oper/…`.
+  Published ~7–8h after cycle time, steps progressively — probe the
+  *last* step's index.
+- **All four cycles use the `oper` stream.** ECMWF open data historically
+  split 06/18Z into a shorter `scda` stream, but that stream is no longer
+  disseminated: there is no `.../0p25/scda/` directory and every scda URL
+  404s. We used to build `scda` URLs for 06/18Z, so `latest_complete_run`
+  got a 404 on those cycles' last-step index and stepped back to the
+  previous 00/12Z run — silently publishing only **2 runs/day** instead
+  of 4. Fixed 2026-07-07 (probe: only `enfo`/`oper`/`waef` dirs exist,
+  `oper` reaches 144h for 06/18Z).
 - Steps are **3-hourly** (not hourly) to 144h; `timesteps` metadata
   carries the real times.
 - **Global grid starts at 0°** → roll columns so the array starts at

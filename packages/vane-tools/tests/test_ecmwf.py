@@ -10,18 +10,20 @@ import pytest
 from vane_tools.ecmwf import _field_ranges, _read_field, data_url, index_url
 
 
-def test_url_scheme_streams() -> None:
-    oper = datetime(2026, 7, 5, 0, tzinfo=timezone.utc)
-    scda = datetime(2026, 7, 5, 6, tzinfo=timezone.utc)
-    assert data_url(oper, 48) == (
+def test_url_scheme_all_cycles_oper() -> None:
+    # All four cycles disseminate under the "oper" stream — the old "scda"
+    # stream for 06/18Z no longer exists (SOURCES.md).
+    run_00 = datetime(2026, 7, 5, 0, tzinfo=timezone.utc)
+    run_06 = datetime(2026, 7, 5, 6, tzinfo=timezone.utc)
+    assert data_url(run_00, 48) == (
         "https://data.ecmwf.int/forecasts/20260705/00z/ifs/0p25/oper/"
         "20260705000000-48h-oper-fc.grib2"
     )
-    assert data_url(scda, 3) == (
-        "https://data.ecmwf.int/forecasts/20260705/06z/ifs/0p25/scda/"
-        "20260705060000-3h-scda-fc.grib2"
+    assert data_url(run_06, 3) == (
+        "https://data.ecmwf.int/forecasts/20260705/06z/ifs/0p25/oper/"
+        "20260705060000-3h-oper-fc.grib2"
     )
-    assert index_url(oper, 0).endswith("20260705000000-0h-oper-fc.index")
+    assert index_url(run_06, 0).endswith("20260705060000-0h-oper-fc.index")
 
 
 def test_field_ranges_filters_levels_and_finds_all_params() -> None:
