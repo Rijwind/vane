@@ -51,13 +51,12 @@ uniform sampler2D u_wind; // RG16F: u (east), v (north) in m/s
 uniform vec4 u_bbox;      // dataset degrees w, s, e, n
 uniform vec4 u_view;      // viewport world-merc bounds: minX, minY, maxX, maxY
 uniform vec4 u_seed;      // respawn box (view ∩ data) world-merc: minX,minY,maxX,maxY
-uniform float u_dt;       // animation seconds advanced this frame
+uniform float u_step;     // viewport-widths advanced per (m/s) this frame
 uniform float u_rand;
 uniform float u_drop;
 uniform float u_dropSpeed;
 out vec4 outState;
 ${MERC_LAT}
-const float WORLD_METERS = 40075016.686; // mercator world width at equator
 
 float rand(vec2 co) {
   return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
@@ -76,9 +75,13 @@ void main() {
   if (noData) wind = vec2(0.0);
   float speed = length(wind);
 
-  // meters -> world-merc units; mercator is conformal so one factor for x & y.
-  float scale = u_dt / (WORLD_METERS * cos(radians(lat)));
-  vec2 newPos = pos + vec2(wind.x, -wind.y) * scale;
+  // Zoom-invariant screen motion: advance a fraction of the current viewport
+  // per frame (∝ wind speed), not a fixed physical distance. So on-screen
+  // speed and trail length stay constant across zoom instead of blowing up as
+  // you zoom in (mercator is conformal, so scaling both axes by the viewport
+  // width keeps the direction correct). Physical speed is shown by color.
+  float viewW = u_view.z - u_view.x;
+  vec2 newPos = pos + vec2(wind.x, -wind.y) * (u_step * viewW);
 
   // Respawn inside the current view∩data box when a particle leaves the
   // screen, drifts off the data, or randomly ages out — keeps on-screen
@@ -158,8 +161,11 @@ export interface ParticlesLayerOptions {
    *  and does not depend on the dataset's coverage — global and regional
    *  sources use the same default. */
   resolution?: number;
-  /** Wind seconds simulated per real second (default 900: 15 min/s). */
-  timeScale?: number;
+  /** Visual flow speed: viewport-widths a max-speed particle travels per
+   *  second, independent of zoom (default 0.14 → crosses the view in ~7s at
+   *  the top of `speedRange`). Higher = faster streaks. Note this is a visual
+   *  rate, not physical m/s — actual speed is shown by color. */
+  flowSpeed?: number;
   /** Speed range (m/s) mapped over the colormap. */
   speedRange?: [number, number];
   /** Stops span the normalized [0,1] speed domain, not m/s. */
@@ -178,7 +184,8 @@ export class ParticlesLayer implements CustomLayerInterface {
   private readonly dataset: VaneDataset;
   private readonly group: string;
   private readonly res: number;
-  private readonly timeScale: number;
+  /** Viewport-widths advanced per (m/s) per second — flowSpeed / speedRange.max. */
+  private readonly flow: number;
   private readonly speedRange: [number, number];
   private readonly colormap: Colormap;
   private readonly fade: number;
@@ -216,8 +223,9 @@ export class ParticlesLayer implements CustomLayerInterface {
       typeof matchMedia !== "undefined" &&
       matchMedia("(pointer: coarse)").matches;
     this.res = options.resolution ?? (coarse ? 64 : 96);
-    this.timeScale = options.timeScale ?? 900;
     this.speedRange = options.speedRange ?? [0, 20];
+    // Convert "viewport-widths/sec at max speed" to widths per (m/s) per sec.
+    this.flow = (options.flowSpeed ?? 0.14) / (this.speedRange[1] || 20);
     this.colormap = options.colormap ?? DEFAULT_PARTICLE_COLORMAP;
     this.opacity = options.opacity ?? 0.9;
     this.fade = options.fade ?? 0.96;
@@ -474,7 +482,7 @@ export class ParticlesLayer implements CustomLayerInterface {
     gl.uniform4f(gl.getUniformLocation(this.updateProgram!, "u_bbox"), west, south, east, north);
     gl.uniform4f(gl.getUniformLocation(this.updateProgram!, "u_view"), view[0], view[1], view[2], view[3]);
     gl.uniform4f(gl.getUniformLocation(this.updateProgram!, "u_seed"), seedX0, seedY0, seedX1, seedY1);
-    gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_dt"), frameSeconds * this.timeScale);
+    gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_step"), frameSeconds * this.flow);
     gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_rand"), Math.random() * 100 + 1);
     gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_drop"), 0.003);
     gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_dropSpeed"), 0.00015);
