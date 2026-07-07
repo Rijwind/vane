@@ -2,21 +2,25 @@
  * `particles` render mode: animated wind particles, GPU ping-pong.
  *
  * Technique after mapbox/webgl-wind, modernized for WebGL2: particle
- * positions live in an RGBA32F texture (xy = **world web-mercator** [0,1],
+ * positions live in an RGBA32F texture (xy = **viewport-normalized** [0,1],
  * z = last sampled speed). Each frame a fullscreen pass advances every
- * particle by the wind vector (conformal mercator scaling, so meters/second
- * are honored at every latitude), then particles are drawn as points into an
+ * particle along the wind vector, then particles are drawn as points into an
  * offscreen trail texture that fades a little every frame, and the trail is
  * composited onto the map.
  *
- * **Viewport-relative seeding.** Particles are respawned within the current
- * map viewport (intersected with the dataset extent), not across the whole
- * dataset bbox. So on-screen density stays constant at every zoom — zooming
- * in concentrates the same particles over less ground (they scale with the
- * map) instead of leaving most of them off-screen. A global dataset zoomed
- * into one region no longer wastes ~95% of its particles or looks sparse,
- * which is both the visual fix and the performance fix (a few thousand
- * on-screen particles beat tens of thousands mostly off-screen).
+ * **Viewport-relative, in normalized coordinates.** Particles are seeded and
+ * advanced in the current viewport's [0,1] space (respawned within the
+ * viewport ∩ dataset extent, sampled/drawn by un-normalizing to world
+ * mercator through the current view bounds). Two payoffs:
+ * - On-screen density and speed stay constant at every zoom — zooming in
+ *   concentrates the same particles over less ground (they scale with the
+ *   map) instead of leaving most off-screen and speeding up without bound.
+ *   A global dataset zoomed into one region no longer wastes ~95% of its
+ *   particles: a few thousand on-screen beat tens of thousands mostly off.
+ * - Normalized storage keeps full float precision at every zoom. Absolute
+ *   world-merc positions lose the per-frame delta to float32 rounding when
+ *   zoomed in (the delta shrinks with the viewport), which froze particles
+ *   into a static grid; normalized positions never underflow.
  *
  * Requires WebGL2 + EXT_color_buffer_float (rendering to float textures).
  * Trails are cleared while the camera moves; correct trail reprojection
@@ -50,8 +54,9 @@ uniform sampler2D u_state;
 uniform sampler2D u_wind; // RG16F: u (east), v (north) in m/s
 uniform vec4 u_bbox;      // dataset degrees w, s, e, n
 uniform vec4 u_view;      // viewport world-merc bounds: minX, minY, maxX, maxY
-uniform vec4 u_seed;      // respawn box (view ∩ data) world-merc: minX,minY,maxX,maxY
-uniform float u_step;     // viewport-widths advanced per (m/s) this frame
+uniform vec4 u_seed;      // respawn box (view ∩ data) in NORMALIZED [0,1] coords
+uniform float u_step;     // normalized units advanced per (m/s) this frame
+uniform float u_aspect;   // viewport width / height (keeps motion isotropic)
 uniform float u_rand;
 uniform float u_drop;
 uniform float u_dropSpeed;
@@ -63,10 +68,14 @@ float rand(vec2 co) {
 }
 
 void main() {
-  // pos is world web-mercator [0,1] (x east, y south).
+  // pos is VIEWPORT-normalized [0,1] (x right, y down). Storing normalized
+  // (not absolute world-merc) keeps full float precision at every zoom — an
+  // absolute-merc delta shrinks with the viewport and drops below float32
+  // epsilon when zoomed in, which froze particles into a static grid.
   vec2 pos = texture(u_state, v_uv).rg;
-  float lat = mercToLat(pos.y);
-  float lon = pos.x * 360.0 - 180.0;
+  vec2 merc = mix(u_view.xy, u_view.zw, pos); // -> world web-mercator for sampling
+  float lat = mercToLat(merc.y);
+  float lon = merc.x * 360.0 - 180.0;
   vec2 uv = vec2((lon - u_bbox.x) / (u_bbox.z - u_bbox.x),
                  (u_bbox.w - lat) / (u_bbox.w - u_bbox.y));
   vec2 wind = texture(u_wind, uv).rg;
@@ -75,20 +84,17 @@ void main() {
   if (noData) wind = vec2(0.0);
   float speed = length(wind);
 
-  // Zoom-invariant screen motion: advance a fraction of the current viewport
-  // per frame (∝ wind speed), not a fixed physical distance. So on-screen
-  // speed and trail length stay constant across zoom instead of blowing up as
-  // you zoom in (mercator is conformal, so scaling both axes by the viewport
-  // width keeps the direction correct). Physical speed is shown by color.
-  float viewW = u_view.z - u_view.x;
-  vec2 newPos = pos + vec2(wind.x, -wind.y) * (u_step * viewW);
+  // Advance in normalized space: on-screen speed and trail length are then
+  // constant at every zoom (Windy-style), and the step never underflows.
+  // The y term carries the aspect ratio so equal m/s look equal on screen;
+  // actual physical speed is shown by color.
+  vec2 newPos = pos + vec2(wind.x, -wind.y * u_aspect) * u_step;
 
-  // Respawn inside the current view∩data box when a particle leaves the
-  // screen, drifts off the data, or randomly ages out — keeps on-screen
-  // density constant at every zoom.
+  // Respawn inside the view∩data box (normalized) when a particle leaves the
+  // viewport, drifts off the data, or randomly ages out.
   vec2 seed = (pos + v_uv) * u_rand;
-  bool offScreen = newPos.x < u_view.x || newPos.x > u_view.z
-                   || newPos.y < u_view.y || newPos.y > u_view.w;
+  bool offScreen = newPos.x < 0.0 || newPos.x > 1.0
+                   || newPos.y < 0.0 || newPos.y > 1.0;
   if (offScreen || noData || rand(seed) < u_drop + speed * u_dropSpeed) {
     newPos = vec2(mix(u_seed.x, u_seed.z, rand(seed + 1.3)),
                   mix(u_seed.y, u_seed.w, rand(seed + 2.1)));
@@ -102,6 +108,7 @@ precision highp float;
 in float a_index; // bound to attrib 0: attribute-less draws force slow paths
 uniform sampler2D u_state;
 uniform mat4 u_matrix;
+uniform vec4 u_view; // viewport world-merc bounds, to un-normalize the position
 uniform float u_size;
 uniform int u_res;
 out float v_speed;
@@ -110,8 +117,9 @@ void main() {
   ivec2 coord = ivec2(index % u_res, index / u_res);
   vec4 state = texelFetch(u_state, coord, 0);
   v_speed = state.b;
-  // state.rg is already world web-mercator [0,1].
-  gl_Position = u_matrix * vec4(state.rg, 0.0, 1.0);
+  // state.rg is viewport-normalized [0,1]; map to world web-mercator to draw.
+  vec2 merc = mix(u_view.xy, u_view.zw, state.rg);
+  gl_Position = u_matrix * vec4(merc, 0.0, 1.0);
   gl_PointSize = u_size;
 }`;
 
@@ -276,8 +284,8 @@ export class ParticlesLayer implements CustomLayerInterface {
     gl.vertexAttribPointer(0, 1, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
 
-    // Particle state: random world-merc start positions, speed 0. Any that
-    // start outside the first viewport are respawned into it within a frame.
+    // Particle state: random viewport-normalized [0,1] start positions, speed
+    // 0. Any that land off the data are respawned into it within a frame.
     const initial = new Float32Array(this.res * this.res * 4);
     for (let i = 0; i < this.res * this.res; i++) {
       initial[i * 4] = Math.random();
@@ -451,12 +459,15 @@ export class ParticlesLayer implements CustomLayerInterface {
     // Current viewport in world-merc, padded a little so particles drift in
     // from just off-screen rather than popping at the exact edge.
     const view = this.viewportMerc();
-    // Respawn box = viewport ∩ dataset. Empty (no overlap) → nothing to draw.
-    const seedX0 = Math.max(view[0], dx0);
-    const seedY0 = Math.max(view[1], dy0);
-    const seedX1 = Math.min(view[2], dx1);
-    const seedY1 = Math.min(view[3], dy1);
-    if (seedX0 >= seedX1 || seedY0 >= seedY1) {
+    const viewW = view[2] - view[0];
+    const viewH = view[3] - view[1];
+    // Respawn box = viewport ∩ dataset, expressed in NORMALIZED [0,1] viewport
+    // coords (matching the particle state). Empty overlap → nothing to draw.
+    const sx0 = (Math.max(view[0], dx0) - view[0]) / viewW;
+    const sy0 = (Math.max(view[1], dy0) - view[1]) / viewH;
+    const sx1 = (Math.min(view[2], dx1) - view[0]) / viewW;
+    const sy1 = (Math.min(view[3], dy1) - view[1]) / viewH;
+    if (sx0 >= sx1 || sy0 >= sy1) {
       // Viewport doesn't overlap the data; skip the sim but keep animating so
       // it recovers once the camera moves back over the data.
       gl.viewport(savedViewport[0]!, savedViewport[1]!, savedViewport[2]!, savedViewport[3]!);
@@ -481,8 +492,12 @@ export class ParticlesLayer implements CustomLayerInterface {
     gl.uniform1i(gl.getUniformLocation(this.updateProgram!, "u_wind"), 1);
     gl.uniform4f(gl.getUniformLocation(this.updateProgram!, "u_bbox"), west, south, east, north);
     gl.uniform4f(gl.getUniformLocation(this.updateProgram!, "u_view"), view[0], view[1], view[2], view[3]);
-    gl.uniform4f(gl.getUniformLocation(this.updateProgram!, "u_seed"), seedX0, seedY0, seedX1, seedY1);
+    gl.uniform4f(gl.getUniformLocation(this.updateProgram!, "u_seed"), sx0, sy0, sx1, sy1);
     gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_step"), frameSeconds * this.flow);
+    gl.uniform1f(
+      gl.getUniformLocation(this.updateProgram!, "u_aspect"),
+      this.trailSize[0] / Math.max(this.trailSize[1], 1),
+    );
     gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_rand"), Math.random() * 100 + 1);
     gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_drop"), 0.003);
     gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_dropSpeed"), 0.00015);
@@ -521,6 +536,7 @@ export class ParticlesLayer implements CustomLayerInterface {
       false,
       projectionMatrix(matrixOrOptions),
     );
+    gl.uniform4f(gl.getUniformLocation(this.drawProgram!, "u_view"), view[0], view[1], view[2], view[3]);
     gl.uniform1f(
       gl.getUniformLocation(this.drawProgram!, "u_size"),
       this.particleSize * (globalThis.devicePixelRatio ?? 1),

@@ -45,3 +45,8 @@ read via HTTP range requests, rendered with MapLibre/WebGL2. Start with
   comments, docs, issues. The repo is public with an international
   audience (MapLibre/Zarr/Pangeo communities); Dutch is for the private
   rijwind planning docs only.
+- **Never `git push`, tag, or `npm publish` without Jelmer's explicit
+  go-ahead.** Commit locally so he can review and verify the change in
+  the browser first; he pushes/tags/publishes himself. Local commits are
+  fine and encouraged; sharing them to the remote or npm is his call.
+  (A push here also auto-deploys the pipeline worker via Coolify.)
