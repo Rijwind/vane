@@ -387,13 +387,17 @@ export class ParticlesLayer implements CustomLayerInterface {
     const clamped = Math.min(Math.max(timestep, 0), nt - 1);
     const t0 = Math.floor(clamped);
     const t1 = Math.min(t0 + 1, nt - 1);
-    this.frac = t1 === t0 ? 0 : clamped - t0;
 
+    // Same bracket already resident: just move the mix fraction.
     if (this.loaded[0] === t0 && this.loaded[1] === t1) {
+      this.frac = t1 === t0 ? 0 : clamped - t0;
       this.map?.triggerRepaint();
       return;
     }
 
+    // New bracket: hold the current wind until both steps are uploaded, then
+    // swap textures *and* fraction together — moving `frac` before the new
+    // fields land would briefly resample the old t0 (a backward jump).
     const generation = ++this.loadGeneration;
     let u0: Field, v0: Field, u1: Field, v1: Field;
     try {
@@ -412,6 +416,7 @@ export class ParticlesLayer implements CustomLayerInterface {
     if (generation !== this.loadGeneration || !this.gl || !this.windTextures) return;
     this.uploadWind(this.gl, this.windTextures[0], u0, v0);
     this.uploadWind(this.gl, this.windTextures[1], u1, v1);
+    this.frac = Math.min(Math.max(this.timestep - t0, 0), 1);
     this.windReady = true;
     this.loaded = [t0, t1];
     this.map?.triggerRepaint();

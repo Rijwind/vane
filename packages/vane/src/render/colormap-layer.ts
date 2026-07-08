@@ -187,14 +187,20 @@ export class ColormapLayer implements CustomLayerInterface {
     const clamped = Math.min(Math.max(timestep, 0), nt - 1);
     const t0 = Math.floor(clamped);
     const t1 = Math.min(t0 + 1, nt - 1);
-    this.frac = t1 === t0 ? 0 : clamped - t0;
 
-    // Same bracket as what's resident: a uniform swap is all that's needed.
+    // Same bracket already resident: just move the mix fraction — the textures
+    // are already correct.
     if (this.loaded[0] === t0 && this.loaded[1] === t1) {
+      this.frac = t1 === t0 ? 0 : clamped - t0;
       this.map?.triggerRepaint();
       return;
     }
 
+    // New bracket: keep showing the current frame until both fields are
+    // uploaded, then swap textures *and* fraction together. During playback
+    // the old t1 equals the new t0, so the field stays continuous across the
+    // fetch. Moving `frac` first would flash the old t0 (a backward jump) until
+    // the data lands — visible as flicker on opaque fields.
     const generation = ++this.loadGeneration;
     let f0, f1;
     try {
@@ -211,6 +217,9 @@ export class ColormapLayer implements CustomLayerInterface {
     if (generation !== this.loadGeneration || !this.gl || !this.fieldTextures) return;
     uploadFieldTexture(this.gl, this.fieldTextures[0], f0);
     uploadFieldTexture(this.gl, this.fieldTextures[1], f1);
+    // Recompute from the latest requested step (it may have advanced during the
+    // fetch), clamped into the new bracket.
+    this.frac = Math.min(Math.max(this.timestep - t0, 0), 1);
     this.fieldReady = true;
     this.loaded = [t0, t1];
     this.map?.triggerRepaint();
