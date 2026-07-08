@@ -217,8 +217,12 @@ export class ArrowsLayer implements CustomLayerInterface {
   }
 
   setTimestep(timestep: number): void {
-    this.timestep = timestep;
-    void this.loadTimestep(timestep);
+    // Arrows don't interpolate between steps — snap a fractional (continuous
+    // playback) step to the nearest integer, and skip a redundant reload.
+    const t = Math.round(timestep);
+    if (t === this.timestep) return;
+    this.timestep = t;
+    void this.loadTimestep(t);
   }
 
   setOpacity(opacity: number): void {

@@ -372,25 +372,40 @@ async function main() {
     drawCharts();
   });
 
+  // Continuous time: the slider glides between forecast steps and the layers
+  // interpolate, so playback flows instead of snapping step-to-step.
+  const lastIndex = meta.timesteps.length - 1;
+  slider.step = "any";
   const setTimestep = (t: number) => {
     slider.value = String(t);
-    show("timestamp", new Date(meta.timesteps[t]!).toUTCString());
+    const idx = Math.min(Math.max(Math.round(t), 0), lastIndex);
+    show("timestamp", new Date(meta.timesteps[idx]!).toUTCString());
     for (const layer of layers) layer.setTimestep(t);
     drawCharts();
   };
   slider.addEventListener("input", () => setTimestep(Number(slider.value)));
 
-  let playTimer: ReturnType<typeof setInterval> | null = null;
+  // One forecast step per `playMs`, advanced by real frame time (rAF).
+  let playing = false;
+  let rafId = 0;
+  let lastTs = 0;
+  const tick = (now: number) => {
+    if (!playing) return;
+    const dt = lastTs ? now - lastTs : 0;
+    lastTs = now;
+    let next = Number(slider.value) + (dt / playMs);
+    if (next >= lastIndex) next -= lastIndex; // loop
+    setTimestep(next);
+    rafId = requestAnimationFrame(tick);
+  };
   playButton.addEventListener("click", () => {
-    if (playTimer) {
-      clearInterval(playTimer);
-      playTimer = null;
-      playButton.textContent = "▶";
+    playing = !playing;
+    playButton.textContent = playing ? "⏸" : "▶";
+    if (playing) {
+      lastTs = 0;
+      rafId = requestAnimationFrame(tick);
     } else {
-      playTimer = setInterval(() => {
-        setTimestep((Number(slider.value) + 1) % meta.timesteps.length);
-      }, playMs);
-      playButton.textContent = "⏸";
+      cancelAnimationFrame(rafId);
     }
   });
 

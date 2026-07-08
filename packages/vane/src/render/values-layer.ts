@@ -107,7 +107,12 @@ export class ValuesLayer {
   }
 
   setTimestep(timestep: number): void {
-    this.timestep = timestep;
+    // Values are honest grid samples, not interpolated — snap a fractional
+    // (continuous playback) step to the nearest integer, and skip a redundant
+    // rebuild when it hasn't changed.
+    const t = Math.round(timestep);
+    if (t === this.timestep) return;
+    this.timestep = t;
     void this.rebuild();
   }
 

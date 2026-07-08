@@ -1,26 +1,38 @@
 /**
  * `particles` render mode: animated wind particles, GPU ping-pong.
  *
- * Technique after mapbox/webgl-wind, modernized for WebGL2: particle
- * positions live in an RGBA32F texture (xy = **viewport-normalized** [0,1],
- * z = last sampled speed). Each frame a fullscreen pass advances every
- * particle along the wind vector, then particles are drawn as points into an
- * offscreen trail texture that fades a little every frame, and the trail is
- * composited onto the map.
+ * Technique after mapbox/webgl-wind, modernized for WebGL2 and made
+ * viewport-relative so it behaves on a slippy map at any zoom and for any
+ * dataset extent (national grid or whole planet).
  *
- * **Viewport-relative, in normalized coordinates.** Particles are seeded and
- * advanced in the current viewport's [0,1] space (respawned within the
- * viewport ∩ dataset extent, sampled/drawn by un-normalizing to world
- * mercator through the current view bounds). Two payoffs:
- * - On-screen density and speed stay constant at every zoom — zooming in
- *   concentrates the same particles over less ground (they scale with the
- *   map) instead of leaving most off-screen and speeding up without bound.
- *   A global dataset zoomed into one region no longer wastes ~95% of its
- *   particles: a few thousand on-screen beat tens of thousands mostly off.
- * - Normalized storage keeps full float precision at every zoom. Absolute
- *   world-merc positions lose the per-frame delta to float32 rounding when
- *   zoomed in (the delta shrinks with the viewport), which froze particles
- *   into a static grid; normalized positions never underflow.
+ * **Screen-space state.** Particle positions live in an RGBA32F texture as
+ * **viewport-normalized** [0,1] coordinates (x right, y down over the current
+ * map view) — i.e. screen space; `z` = last sampled speed, `w` = alive flag.
+ * Each frame a fullscreen pass un-normalizes each particle to world mercator
+ * through the live view bounds, samples the wind there, and advances it.
+ * Because positions are already screen space, the draw pass maps them
+ * **straight to clip space** — no projection matrix, so it stays exact when
+ * zoomed in (an absolute-mercator `mix()` loses float precision at high zoom
+ * and collapses particles onto a grid of dots).
+ *
+ * **Constant on-screen density.** Particles are seeded uniformly across the
+ * whole viewport; any that fall off the dataset are hidden (culled in the
+ * draw pass) rather than drawn. So the density over the data is constant per
+ * screen-area at every zoom and for every source — a global grid zoomed into
+ * one country isn't sparse, a national grid isn't overpacked, and a regional
+ * grid shows particles only where it has data, at the same density as
+ * elsewhere (like Windy).
+ *
+ * **Wind-proportional, zoom-invariant speed.** Particles advance a pixel
+ * velocity proportional to the wind magnitude (`speedScale` px/s per m/s),
+ * divided by the canvas size — so a given wind looks equally fast at every
+ * zoom, and stronger wind visibly moves faster. Mercator is north-aligned and
+ * conformal, so `(u, -v)` is the correct screen direction at every latitude.
+ *
+ * **Continuous time.** Two adjacent timesteps are kept resident and the wind
+ * is mixed by a `frac` in [0,1]; `setTimestep` takes a fractional step and
+ * only refetches when the integer bracket changes, so a sliding time control
+ * flows instead of snapping.
  *
  * Requires WebGL2 + EXT_color_buffer_float (rendering to float textures).
  * Trails are cleared while the camera moves; correct trail reprojection
@@ -31,7 +43,7 @@ import type { CustomLayerInterface, Map as MapLibreMap } from "maplibre-gl";
 
 import type { VaneDataset, Field } from "../dataset.js";
 import { buildLut, type Colormap } from "./colormaps.js";
-import { assertWebGL2, compileProgram, mercator, projectionMatrix } from "./gl.js";
+import { assertWebGL2, compileProgram, mercator } from "./gl.js";
 
 const MERC_LAT = `
 const float PI = 3.141592653589793;
@@ -51,12 +63,14 @@ const UPDATE_FRAGMENT = `#version 300 es
 precision highp float;
 in vec2 v_uv;
 uniform sampler2D u_state;
-uniform sampler2D u_wind; // RG16F: u (east), v (north) in m/s
-uniform vec4 u_bbox;      // dataset degrees w, s, e, n
-uniform vec4 u_view;      // viewport world-merc bounds: minX, minY, maxX, maxY
-uniform vec4 u_seed;      // respawn box (view ∩ data) in NORMALIZED [0,1] coords
-uniform float u_step;     // normalized units advanced per (m/s) this frame
-uniform float u_aspect;   // viewport width / height (keeps motion isotropic)
+uniform sampler2D u_wind0;  // RG16F: u (east), v (north) in m/s at step t0
+uniform sampler2D u_wind1;  // ... at step t1
+uniform float u_frac;       // wind = mix(t0, t1, frac)
+uniform vec4 u_view;        // view world-merc bounds: minX, minY(n), maxX, maxY(s)
+uniform vec4 u_bbox;        // dataset degrees w, s, e, n
+uniform vec2 u_viewportPx;  // drawing-buffer size (px), to equalize x/y speed
+uniform float u_speedScale; // on-screen px/sec per (m/s)
+uniform float u_dt;         // real seconds this frame
 uniform float u_rand;
 uniform float u_drop;
 uniform float u_dropSpeed;
@@ -67,59 +81,76 @@ float rand(vec2 co) {
   return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-void main() {
-  // pos is VIEWPORT-normalized [0,1] (x right, y down). Storing normalized
-  // (not absolute world-merc) keeps full float precision at every zoom — an
-  // absolute-merc delta shrinks with the viewport and drops below float32
-  // epsilon when zoomed in, which froze particles into a static grid.
-  vec2 pos = texture(u_state, v_uv).rg;
-  vec2 merc = mix(u_view.xy, u_view.zw, pos); // -> world web-mercator for sampling
+// Interpolated wind (m/s) at a viewport-normalized position: .xy = wind,
+// .z = 1.0 when the position falls on the dataset, else 0.0 (off-data).
+vec3 sampleWind(vec2 p) {
+  vec2 merc = mix(u_view.xy, u_view.zw, p);
   float lat = mercToLat(merc.y);
   float lon = merc.x * 360.0 - 180.0;
   vec2 uv = vec2((lon - u_bbox.x) / (u_bbox.z - u_bbox.x),
                  (u_bbox.w - lat) / (u_bbox.w - u_bbox.y));
-  vec2 wind = texture(u_wind, uv).rg;
-  bool noData = uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0
-                || !(wind.x == wind.x);
-  if (noData) wind = vec2(0.0);
-  float speed = length(wind);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec3(0.0);
+  vec2 wind = mix(texture(u_wind0, uv).rg, texture(u_wind1, uv).rg, u_frac);
+  if (!(wind.x == wind.x)) return vec3(0.0); // NaN = nodata
+  return vec3(wind, 1.0);
+}
 
-  // Advance in normalized space: on-screen speed and trail length are then
-  // constant at every zoom (Windy-style), and the step never underflows.
-  // The y term carries the aspect ratio so equal m/s look equal on screen;
-  // actual physical speed is shown by color.
-  vec2 newPos = pos + vec2(wind.x, -wind.y * u_aspect) * u_step;
+void main() {
+  vec2 pos = texture(u_state, v_uv).rg;
+  vec3 w = sampleWind(pos);
+  float speed = length(w.xy);
 
-  // Respawn inside the view∩data box (normalized) when a particle leaves the
-  // viewport, drifts off the data, or randomly ages out.
+  // Pixel velocity ∝ wind magnitude, zoom-invariant (viewport px are constant
+  // across zoom); divide by the canvas size so equal m/s look equally fast on
+  // both axes. Advance in normalized space so the step never underflows.
+  vec2 newPos = pos + vec2(w.x, -w.y) * u_speedScale * u_dt / u_viewportPx;
+
   vec2 seed = (pos + v_uv) * u_rand;
-  bool offScreen = newPos.x < 0.0 || newPos.x > 1.0
-                   || newPos.y < 0.0 || newPos.y > 1.0;
-  if (offScreen || noData || rand(seed) < u_drop + speed * u_dropSpeed) {
-    newPos = vec2(mix(u_seed.x, u_seed.z, rand(seed + 1.3)),
-                  mix(u_seed.y, u_seed.w, rand(seed + 2.1)));
-    speed = 0.0;
+  bool respawn = w.z < 0.5
+    || any(lessThan(newPos, vec2(0.0))) || any(greaterThan(newPos, vec2(1.0)))
+    || rand(seed) < u_drop + speed * u_dropSpeed;
+  if (respawn) {
+    // Uniform over the whole viewport → constant on-screen density; particles
+    // that land off-data are hidden in the draw pass (Windy-style).
+    newPos = vec2(rand(seed + 1.3), rand(seed + 2.1));
   }
-  outState = vec4(newPos, speed, 1.0);
+
+  // Data membership + speed at the *final* position (moved or respawned) so the
+  // stored color is right and off-data particles are culled when drawn.
+  vec3 wn = sampleWind(newPos);
+  outState = vec4(newPos, length(wn.xy), wn.z);
 }`;
 
 const DRAW_VERTEX = `#version 300 es
 precision highp float;
 in float a_index; // bound to attrib 0: attribute-less draws force slow paths
 uniform sampler2D u_state;
-uniform mat4 u_matrix;
-uniform vec4 u_view; // viewport world-merc bounds, to un-normalize the position
 uniform float u_size;
 uniform int u_res;
+uniform float u_keep; // fraction of particles to draw (thin out when over-zoomed)
 out float v_speed;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 void main() {
   int index = int(a_index);
   ivec2 coord = ivec2(index % u_res, index / u_res);
+  // Stable per-particle thinning: zoom past the data's resolution and a global
+  // grid is one near-uniform cell, so full density is just a solid mass — keep
+  // a fixed subset (no flicker) so the field thins to bright streaks instead.
+  if (hash(vec2(coord)) >= u_keep) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    gl_PointSize = 0.0;
+    return;
+  }
   vec4 state = texelFetch(u_state, coord, 0);
+  if (state.a < 0.5) { // off-data: cull off-screen
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    gl_PointSize = 0.0;
+    return;
+  }
   v_speed = state.b;
-  // state.rg is viewport-normalized [0,1]; map to world web-mercator to draw.
-  vec2 merc = mix(u_view.xy, u_view.zw, state.rg);
-  gl_Position = u_matrix * vec4(merc, 0.0, 1.0);
+  // State is viewport-normalized [0,1] (x right, y down) = screen space, so map
+  // straight to clip space — no projection matrix, exact at any zoom.
+  gl_Position = vec4(state.r * 2.0 - 1.0, 1.0 - state.g * 2.0, 0.0, 1.0);
   gl_PointSize = u_size;
 }`;
 
@@ -162,24 +193,21 @@ export interface ParticlesLayerOptions {
   dataset: VaneDataset;
   /** Vector group name (e.g. "wind") — resolves the u/v variable pair. */
   variable?: string;
+  /** May be fractional — the wind field interpolates between steps. */
   timestep?: number;
-  /** Particle count is the square of this (default 96 → 9216, or 64 on
-   *  coarse-pointer/touch devices). Since particles are seeded into the
-   *  viewport rather than the whole dataset, the count is on-screen density
-   *  and does not depend on the dataset's coverage — global and regional
-   *  sources use the same default. */
+  /** Particle count is the square of this. Coverage-independent now that
+   *  seeding is viewport-relative (default 72, or 52 on coarse-pointer/touch
+   *  devices to keep phones smooth). */
   resolution?: number;
-  /** Visual flow speed: viewport-widths a max-speed particle travels per
-   *  second, independent of zoom (default 0.14 → crosses the view in ~7s at
-   *  the top of `speedRange`). Higher = faster streaks. Note this is a visual
-   *  rate, not physical m/s — actual speed is shown by color. */
-  flowSpeed?: number;
+  /** On-screen pixels/second per (m/s) of wind. Sets how fast the field
+   *  flows for a given wind strength; zoom-invariant (default 6). */
+  speedScale?: number;
   /** Speed range (m/s) mapped over the colormap. */
   speedRange?: [number, number];
   /** Stops span the normalized [0,1] speed domain, not m/s. */
   colormap?: Colormap;
   opacity?: number;
-  /** Per-frame trail retention (0..1, default 0.96). */
+  /** Per-frame trail retention (0..1, default 0.95). */
   fade?: number;
   particleSize?: number;
 }
@@ -192,8 +220,7 @@ export class ParticlesLayer implements CustomLayerInterface {
   private readonly dataset: VaneDataset;
   private readonly group: string;
   private readonly res: number;
-  /** Viewport-widths advanced per (m/s) per second — flowSpeed / speedRange.max. */
-  private readonly flow: number;
+  private readonly speedScale: number;
   private readonly speedRange: [number, number];
   private readonly colormap: Colormap;
   private readonly fade: number;
@@ -211,13 +238,18 @@ export class ParticlesLayer implements CustomLayerInterface {
   private stateTextures: [WebGLTexture, WebGLTexture] | null = null;
   private trailTextures: [WebGLTexture, WebGLTexture] | null = null;
   private trailSize: [number, number] = [0, 0];
-  private windTexture: WebGLTexture | null = null;
+  /** Two resident wind timesteps; the update shader mixes them by `frac`. */
+  private windTextures: [WebGLTexture, WebGLTexture] | null = null;
   private lutTexture: WebGLTexture | null = null;
   private framebuffer: WebGLFramebuffer | null = null;
   private windReady = false;
   private trailsValid = false;
   private lastFrame = 0;
   private loadGeneration = 0;
+  private loaded: [number, number] = [-1, -1];
+  private frac = 0;
+  /** Wind grid dimensions (px) — for the over-zoom thinning factor. */
+  private gridWidth = 0;
   private readonly clearTrails = () => {
     this.trailsValid = false;
   };
@@ -230,13 +262,12 @@ export class ParticlesLayer implements CustomLayerInterface {
     const coarse =
       typeof matchMedia !== "undefined" &&
       matchMedia("(pointer: coarse)").matches;
-    this.res = options.resolution ?? (coarse ? 64 : 96);
+    this.res = options.resolution ?? (coarse ? 52 : 72);
+    this.speedScale = options.speedScale ?? 6;
     this.speedRange = options.speedRange ?? [0, 20];
-    // Convert "viewport-widths/sec at max speed" to widths per (m/s) per sec.
-    this.flow = (options.flowSpeed ?? 0.14) / (this.speedRange[1] || 20);
     this.colormap = options.colormap ?? DEFAULT_PARTICLE_COLORMAP;
     this.opacity = options.opacity ?? 0.9;
-    this.fade = options.fade ?? 0.96;
+    this.fade = options.fade ?? 0.95;
     this.particleSize = options.particleSize ?? 1.6;
   }
 
@@ -284,8 +315,8 @@ export class ParticlesLayer implements CustomLayerInterface {
     gl.vertexAttribPointer(0, 1, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
 
-    // Particle state: random viewport-normalized [0,1] start positions, speed
-    // 0. Any that land off the data are respawned into it within a frame.
+    // Particle state: random start positions (viewport-normalized), speed 0,
+    // dead (alive set on the first sim step so nothing flashes off-data).
     const initial = new Float32Array(this.res * this.res * 4);
     for (let i = 0; i < this.res * this.res; i++) {
       initial[i * 4] = Math.random();
@@ -306,7 +337,7 @@ export class ParticlesLayer implements CustomLayerInterface {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
 
-    this.windTexture = gl.createTexture();
+    this.windTextures = [gl.createTexture(), gl.createTexture()];
     void this.loadTimestep(this.timestep);
 
     map.on("move", this.clearTrails);
@@ -322,7 +353,7 @@ export class ParticlesLayer implements CustomLayerInterface {
       for (const t of [
         ...(this.stateTextures ?? []),
         ...(this.trailTextures ?? []),
-        this.windTexture,
+        ...(this.windTextures ?? []),
         this.lutTexture,
       ]) {
         if (t) gl.deleteTexture(t);
@@ -335,9 +366,10 @@ export class ParticlesLayer implements CustomLayerInterface {
     this.map = null;
     this.stateTextures = null;
     this.trailTextures = null;
-    this.windTexture = null;
+    this.windTextures = null;
     this.lutTexture = null;
     this.windReady = false;
+    this.loaded = [-1, -1];
   }
 
   setTimestep(timestep: number): void {
@@ -351,28 +383,43 @@ export class ParticlesLayer implements CustomLayerInterface {
   }
 
   private async loadTimestep(timestep: number): Promise<void> {
+    const nt = this.dataset.meta.timesteps.length;
+    const clamped = Math.min(Math.max(timestep, 0), nt - 1);
+    const t0 = Math.floor(clamped);
+    const t1 = Math.min(t0 + 1, nt - 1);
+    this.frac = t1 === t0 ? 0 : clamped - t0;
+
+    if (this.loaded[0] === t0 && this.loaded[1] === t1) {
+      this.map?.triggerRepaint();
+      return;
+    }
+
     const generation = ++this.loadGeneration;
-    let uField: Field;
-    let vField: Field;
+    let u0: Field, v0: Field, u1: Field, v1: Field;
     try {
       const { u, v } = this.dataset.vectorGroup(this.group);
-      [uField, vField] = await Promise.all([
-        this.dataset.getField(u, timestep),
-        this.dataset.getField(v, timestep),
+      [u0, v0, u1, v1] = await Promise.all([
+        this.dataset.getField(u, t0),
+        this.dataset.getField(v, t0),
+        this.dataset.getField(u, t1),
+        this.dataset.getField(v, t1),
       ]);
     } catch (err) {
       // Keep showing the previous frame; a later setTimestep can recover.
-      console.error(`vane: ${this.id}: failed to load timestep ${timestep}:`, err);
+      console.error(`vane: ${this.id}: failed to load bracket ${t0}..${t1}:`, err);
       return;
     }
-    if (generation !== this.loadGeneration || !this.gl || !this.windTexture) return;
-    this.uploadWind(this.gl, uField, vField);
+    if (generation !== this.loadGeneration || !this.gl || !this.windTextures) return;
+    this.uploadWind(this.gl, this.windTextures[0], u0, v0);
+    this.uploadWind(this.gl, this.windTextures[1], u1, v1);
     this.windReady = true;
+    this.loaded = [t0, t1];
     this.map?.triggerRepaint();
   }
 
-  private uploadWind(gl: WebGL2RenderingContext, u: Field, v: Field): void {
+  private uploadWind(gl: WebGL2RenderingContext, texture: WebGLTexture, u: Field, v: Field): void {
     const { width, height } = u;
+    this.gridWidth = width;
     const data = new Float32Array(width * height * 2);
     for (let i = 0; i < width * height; i++) {
       const ru = u.data[i]!;
@@ -380,7 +427,7 @@ export class ParticlesLayer implements CustomLayerInterface {
       data[i * 2] = ru === u.nodata ? 0 : ru * u.scale + u.offset;
       data[i * 2 + 1] = rv === v.nodata ? 0 : rv * v.scale + v.offset;
     }
-    gl.bindTexture(gl.TEXTURE_2D, this.windTexture);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG16F, width, height, 0, gl.RG, gl.FLOAT, data);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -398,25 +445,6 @@ export class ParticlesLayer implements CustomLayerInterface {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return texture;
-  }
-
-  /** Current map viewport as world-merc [minX, minY, maxX, maxY], padded ~12%
-   *  so respawns land just off-screen and particles drift into view. Lon is
-   *  clamped to [-180,180] (a zoomed-out map can report wrapped bounds). */
-  private viewportMerc(): [number, number, number, number] {
-    const b = this.map!.getBounds();
-    const west = Math.max(b.getWest(), -180);
-    const east = Math.min(b.getEast(), 180);
-    const [x0, y0] = mercator(west, b.getNorth());
-    const [x1, y1] = mercator(east, b.getSouth());
-    const padX = (x1 - x0) * 0.12;
-    const padY = (y1 - y0) * 0.12;
-    return [
-      Math.max(0, x0 - padX),
-      Math.max(0, y0 - padY),
-      Math.min(1, x1 + padX),
-      Math.min(1, y1 + padY),
-    ];
   }
 
   private ensureTrailTextures(gl: WebGL2RenderingContext): void {
@@ -441,9 +469,20 @@ export class ParticlesLayer implements CustomLayerInterface {
     this.trailsValid = false;
   }
 
-  prerender(gl_: WebGLRenderingContext | WebGL2RenderingContext, matrixOrOptions: unknown): void {
+  /** Current view rectangle in world mercator (top-left .xy .. bottom-right
+   *  .zw) — recomputed each frame; the camera can move between frames. */
+  private viewRect(): [number, number, number, number] {
+    const bounds = this.map!.getBounds();
+    const [x0, y0] = mercator(bounds.getWest(), bounds.getNorth());
+    const [x1, y1] = mercator(bounds.getEast(), bounds.getSouth());
+    return [x0, y0, x1, y1];
+  }
+
+  prerender(gl_: WebGLRenderingContext | WebGL2RenderingContext): void {
     const gl = this.gl;
-    if (!gl || !this.windReady || !this.stateTextures || !this.framebuffer) return;
+    if (!gl || !this.windReady || !this.stateTextures || !this.windTextures || !this.framebuffer || !this.map) {
+      return;
+    }
 
     const now = performance.now();
     const frameSeconds = this.lastFrame ? Math.min((now - this.lastFrame) / 1000, 0.1) : 1 / 60;
@@ -452,27 +491,20 @@ export class ParticlesLayer implements CustomLayerInterface {
     const savedViewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
     this.ensureTrailTextures(gl);
 
+    const view = this.viewRect();
     const [west, south, east, north] = this.dataset.meta.bbox;
-    // Dataset extent in world-merc (x east, y south).
-    const [dx0, dy0] = mercator(west, north);
-    const [dx1, dy1] = mercator(east, south);
-    // Current viewport in world-merc, padded a little so particles drift in
-    // from just off-screen rather than popping at the exact edge.
-    const view = this.viewportMerc();
-    const viewW = view[2] - view[0];
-    const viewH = view[3] - view[1];
-    // Respawn box = viewport ∩ dataset, expressed in NORMALIZED [0,1] viewport
-    // coords (matching the particle state). Empty overlap → nothing to draw.
-    const sx0 = (Math.max(view[0], dx0) - view[0]) / viewW;
-    const sy0 = (Math.max(view[1], dy0) - view[1]) / viewH;
-    const sx1 = (Math.min(view[2], dx1) - view[0]) / viewW;
-    const sy1 = (Math.min(view[3], dy1) - view[1]) / viewH;
-    if (sx0 >= sx1 || sy0 >= sy1) {
-      // Viewport doesn't overlap the data; skip the sim but keep animating so
-      // it recovers once the camera moves back over the data.
-      gl.viewport(savedViewport[0]!, savedViewport[1]!, savedViewport[2]!, savedViewport[3]!);
-      this.map?.triggerRepaint();
-      return;
+
+    // Thin the field out when zoomed in past the wind grid's resolution: a
+    // coarse (global) grid at city zoom is one near-uniform cell, which full
+    // density paints as a solid mass. Full density while ≳ 7 cells span the
+    // view; fades to a fifth once a single cell fills it.
+    let keep = 1;
+    if (this.gridWidth > 1) {
+      const cellLon = (east - west) / this.gridWidth;
+      const bounds = this.map.getBounds();
+      const cellsAcross = Math.abs(bounds.getEast() - bounds.getWest()) / cellLon;
+      const t = Math.min(Math.max((cellsAcross - 1.5) / (7 - 1.5), 0), 1);
+      keep = 0.2 + 0.8 * (t * t * (3 - 2 * t)); // smoothstep 0.2 .. 1
     }
 
     // Pass 1 — advance particle state (ping-pong).
@@ -488,16 +520,21 @@ export class ParticlesLayer implements CustomLayerInterface {
     gl.bindTexture(gl.TEXTURE_2D, src);
     gl.uniform1i(gl.getUniformLocation(this.updateProgram!, "u_state"), 0);
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.windTexture);
-    gl.uniform1i(gl.getUniformLocation(this.updateProgram!, "u_wind"), 1);
-    gl.uniform4f(gl.getUniformLocation(this.updateProgram!, "u_bbox"), west, south, east, north);
+    gl.bindTexture(gl.TEXTURE_2D, this.windTextures[0]);
+    gl.uniform1i(gl.getUniformLocation(this.updateProgram!, "u_wind0"), 1);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.windTextures[1]);
+    gl.uniform1i(gl.getUniformLocation(this.updateProgram!, "u_wind1"), 2);
+    gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_frac"), this.frac);
     gl.uniform4f(gl.getUniformLocation(this.updateProgram!, "u_view"), view[0], view[1], view[2], view[3]);
-    gl.uniform4f(gl.getUniformLocation(this.updateProgram!, "u_seed"), sx0, sy0, sx1, sy1);
-    gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_step"), frameSeconds * this.flow);
-    gl.uniform1f(
-      gl.getUniformLocation(this.updateProgram!, "u_aspect"),
-      this.trailSize[0] / Math.max(this.trailSize[1], 1),
+    gl.uniform4f(gl.getUniformLocation(this.updateProgram!, "u_bbox"), west, south, east, north);
+    gl.uniform2f(
+      gl.getUniformLocation(this.updateProgram!, "u_viewportPx"),
+      gl.drawingBufferWidth,
+      gl.drawingBufferHeight,
     );
+    gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_speedScale"), this.speedScale);
+    gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_dt"), frameSeconds);
     gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_rand"), Math.random() * 100 + 1);
     gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_drop"), 0.003);
     gl.uniform1f(gl.getUniformLocation(this.updateProgram!, "u_dropSpeed"), 0.00015);
@@ -531,17 +568,12 @@ export class ParticlesLayer implements CustomLayerInterface {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.lutTexture);
     gl.uniform1i(gl.getUniformLocation(this.drawProgram!, "u_lut"), 1);
-    gl.uniformMatrix4fv(
-      gl.getUniformLocation(this.drawProgram!, "u_matrix"),
-      false,
-      projectionMatrix(matrixOrOptions),
-    );
-    gl.uniform4f(gl.getUniformLocation(this.drawProgram!, "u_view"), view[0], view[1], view[2], view[3]);
     gl.uniform1f(
       gl.getUniformLocation(this.drawProgram!, "u_size"),
       this.particleSize * (globalThis.devicePixelRatio ?? 1),
     );
     gl.uniform1i(gl.getUniformLocation(this.drawProgram!, "u_res"), this.res);
+    gl.uniform1f(gl.getUniformLocation(this.drawProgram!, "u_keep"), keep);
     gl.uniform2f(
       gl.getUniformLocation(this.drawProgram!, "u_speedRange"),
       this.speedRange[0],

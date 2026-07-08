@@ -115,7 +115,11 @@ export class ContoursLayer {
   }
 
   setTimestep(timestep: number): void {
-    this.timestep = timestep;
+    // Contours aren't interpolated — snap a fractional (continuous playback)
+    // step to the nearest integer, and skip a redundant rebuild.
+    const t = Math.round(timestep);
+    if (t === this.timestep) return;
+    this.timestep = t;
     void this.rebuild();
   }
 

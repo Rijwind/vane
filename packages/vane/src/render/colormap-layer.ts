@@ -5,6 +5,12 @@
  * mercator space and, per fragment, converts mercator → lat/lon → grid UV,
  * samples the R16F field texture (hardware bilinear) and maps the physical
  * value through a 256-entry colormap LUT over `clim`.
+ *
+ * Time is continuous: two adjacent timesteps are kept resident and the
+ * fragment mixes them by a `frac` in [0,1], so a smoothly-sliding time
+ * control morphs the surface between forecast hours instead of snapping.
+ * `setTimestep` takes a fractional step; the two bracketing integer fields
+ * are (re)loaded only when the bracket changes.
  */
 
 import type { CustomLayerInterface, Map as MapLibreMap } from "maplibre-gl";
@@ -33,7 +39,9 @@ void main() {
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 in vec2 v_merc;
-uniform sampler2D u_field;
+uniform sampler2D u_field0;
+uniform sampler2D u_field1;
+uniform float u_frac;
 uniform sampler2D u_lut;
 uniform vec4 u_bbox; // west, south, east, north (degrees)
 uniform vec2 u_clim;
@@ -46,8 +54,12 @@ void main() {
   vec2 uv = vec2((lon - u_bbox.x) / (u_bbox.z - u_bbox.x),
                  (u_bbox.w - lat) / (u_bbox.w - u_bbox.y));
   if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) discard;
-  float value = texture(u_field, uv).r;
-  if (!(value == value)) discard; // NaN = nodata
+  float v0 = texture(u_field0, uv).r;
+  float v1 = texture(u_field1, uv).r;
+  bool n0 = !(v0 == v0); // NaN = nodata
+  bool n1 = !(v1 == v1);
+  if (n0 && n1) discard;
+  float value = n0 ? v1 : (n1 ? v0 : mix(v0, v1, u_frac));
   float t = clamp((value - u_clim.x) / (u_clim.y - u_clim.x), 0.0, 1.0);
   vec4 color = texture(u_lut, vec2(t, 0.5));
   float alpha = color.a * u_opacity;
@@ -58,6 +70,7 @@ export interface ColormapLayerOptions {
   id: string;
   dataset: VaneDataset;
   variable: string;
+  /** May be fractional — the surface interpolates between bracketing steps. */
   timestep?: number;
   colormap?: Colormap;
   /** Physical value range mapped over the colormap. */
@@ -81,11 +94,15 @@ export class ColormapLayer implements CustomLayerInterface {
   private gl: WebGL2RenderingContext | null = null;
   private program: WebGLProgram | null = null;
   private vao: WebGLVertexArrayObject | null = null;
-  private fieldTexture: WebGLTexture | null = null;
+  /** Two resident timesteps; the fragment mixes them by `frac`. */
+  private fieldTextures: [WebGLTexture, WebGLTexture] | null = null;
   private lutTexture: WebGLTexture | null = null;
   private fieldReady = false;
   private lutDirty = true;
   private loadGeneration = 0;
+  /** Integer steps currently in slots 0/1 (`-1` = unloaded). */
+  private loaded: [number, number] = [-1, -1];
+  private frac = 0;
 
   constructor(options: ColormapLayerOptions) {
     this.id = options.id;
@@ -121,7 +138,7 @@ export class ColormapLayer implements CustomLayerInterface {
     gl2.vertexAttribPointer(aUv, 2, gl2.FLOAT, false, 0, 0);
     gl2.bindVertexArray(null);
 
-    this.fieldTexture = gl2.createTexture();
+    this.fieldTextures = [gl2.createTexture(), gl2.createTexture()];
     this.lutTexture = gl2.createTexture();
     void this.loadTimestep(this.timestep);
   }
@@ -131,20 +148,22 @@ export class ColormapLayer implements CustomLayerInterface {
     if (gl) {
       if (this.program) gl.deleteProgram(this.program);
       if (this.vao) gl.deleteVertexArray(this.vao);
-      if (this.fieldTexture) gl.deleteTexture(this.fieldTexture);
+      for (const t of this.fieldTextures ?? []) gl.deleteTexture(t);
       if (this.lutTexture) gl.deleteTexture(this.lutTexture);
     }
     this.gl = null;
     this.map = null;
     this.program = null;
     this.vao = null;
-    this.fieldTexture = null;
+    this.fieldTextures = null;
     this.lutTexture = null;
     this.fieldReady = false;
     this.lutDirty = true;
+    this.loaded = [-1, -1];
   }
 
-  /** Switch the displayed timestep; keeps the old frame until data arrives. */
+  /** Switch the displayed timestep (fractional); keeps the old frame until
+   *  data arrives. Only refetches when the integer bracket changes. */
   setTimestep(timestep: number): void {
     this.timestep = timestep;
     void this.loadTimestep(timestep);
@@ -164,25 +183,42 @@ export class ColormapLayer implements CustomLayerInterface {
   }
 
   private async loadTimestep(timestep: number): Promise<void> {
+    const nt = this.dataset.meta.timesteps.length;
+    const clamped = Math.min(Math.max(timestep, 0), nt - 1);
+    const t0 = Math.floor(clamped);
+    const t1 = Math.min(t0 + 1, nt - 1);
+    this.frac = t1 === t0 ? 0 : clamped - t0;
+
+    // Same bracket as what's resident: a uniform swap is all that's needed.
+    if (this.loaded[0] === t0 && this.loaded[1] === t1) {
+      this.map?.triggerRepaint();
+      return;
+    }
+
     const generation = ++this.loadGeneration;
-    let field;
+    let f0, f1;
     try {
-      field = await this.dataset.getField(this.variable, timestep);
+      [f0, f1] = await Promise.all([
+        this.dataset.getField(this.variable, t0),
+        this.dataset.getField(this.variable, t1),
+      ]);
     } catch (err) {
       // Keep showing the previous frame; a later setTimestep can recover.
-      console.error(`vane: ${this.id}: failed to load timestep ${timestep}:`, err);
+      console.error(`vane: ${this.id}: failed to load bracket ${t0}..${t1}:`, err);
       return;
     }
     // A newer request superseded this one while we were fetching.
-    if (generation !== this.loadGeneration || !this.gl || !this.fieldTexture) return;
-    uploadFieldTexture(this.gl, this.fieldTexture, field);
+    if (generation !== this.loadGeneration || !this.gl || !this.fieldTextures) return;
+    uploadFieldTexture(this.gl, this.fieldTextures[0], f0);
+    uploadFieldTexture(this.gl, this.fieldTextures[1], f1);
     this.fieldReady = true;
+    this.loaded = [t0, t1];
     this.map?.triggerRepaint();
   }
 
   render(gl_: WebGLRenderingContext | WebGL2RenderingContext, matrixOrOptions: unknown): void {
     const gl = this.gl;
-    if (!gl || !this.program || !this.vao || !this.fieldReady) return;
+    if (!gl || !this.program || !this.vao || !this.fieldReady || !this.fieldTextures) return;
 
     if (this.lutDirty && this.lutTexture) {
       gl.bindTexture(gl.TEXTURE_2D, this.lutTexture);
@@ -211,13 +247,17 @@ export class ColormapLayer implements CustomLayerInterface {
     gl.uniform4f(gl.getUniformLocation(this.program, "u_bbox"), west, south, east, north);
     gl.uniform2f(gl.getUniformLocation(this.program, "u_clim"), this.clim[0], this.clim[1]);
     gl.uniform1f(gl.getUniformLocation(this.program, "u_opacity"), this.opacity);
+    gl.uniform1f(gl.getUniformLocation(this.program, "u_frac"), this.frac);
 
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.fieldTexture);
-    gl.uniform1i(gl.getUniformLocation(this.program, "u_field"), 0);
+    gl.bindTexture(gl.TEXTURE_2D, this.fieldTextures[0]);
+    gl.uniform1i(gl.getUniformLocation(this.program, "u_field0"), 0);
     gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.fieldTextures[1]);
+    gl.uniform1i(gl.getUniformLocation(this.program, "u_field1"), 1);
+    gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.lutTexture);
-    gl.uniform1i(gl.getUniformLocation(this.program, "u_lut"), 1);
+    gl.uniform1i(gl.getUniformLocation(this.program, "u_lut"), 2);
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
